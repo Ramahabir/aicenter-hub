@@ -128,8 +128,14 @@ app.use((error, _request, response, _next) => {
   response.status(400).json({ error: message });
 });
 
-app.get("/", (_request, response) => response.redirect(302, BASE_PATH + "/"));
-app.get(BASE_PATH, (_request, response) => response.redirect(302, BASE_PATH + "/"));
+app.use((request, _response, next) => {
+  if (request.url === "/" || request.url.startsWith("/?")) {
+    request.url = BASE_PATH + "/" + request.url.slice(1);
+  } else if (request.url === BASE_PATH || request.url.startsWith(BASE_PATH + "?")) {
+    request.url = BASE_PATH + "/" + request.url.slice(BASE_PATH.length);
+  }
+  next();
+});
 app.use(createProxyMiddleware({ target: process.env.WEB_SERVICE_URL || "http://localhost:3000", changeOrigin: true, ws: true }));
 
 app.listen(PORT, HOST, () => console.log(`Service Hub ready on http://${HOST}:${PORT} using ${CONFIGURED_PRINTER}`));
