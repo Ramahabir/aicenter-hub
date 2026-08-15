@@ -31,5 +31,6 @@ test("keeps printer execution in the local service", async () => {
   assert.match(server, /25 \* 1024 \* 1024/);
   assert.match(server, /SERVICE_HUB_PIN/);
   assert.ok(server.includes('const BASE_PATH = "/service-hub";'));
+  assert.match(server, /express\.static\(clientAssetsDir/);
   assert.deepEqual(JSON.parse(hosting), { d1: null, r2: null });
 });

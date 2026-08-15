@@ -18,6 +18,7 @@ const CONFIGURED_PRINTER = process.env.PRINTER_NAME || "EPSON L3110";
 const SERVICE_PIN = process.env.SERVICE_HUB_PIN || "";
 const BASE_PATH = "/service-hub";
 const tempDir = path.join(os.tmpdir(), "ai-center-service-hub");
+const clientAssetsDir = path.join(process.cwd(), "dist", "client", "service-hub", "_next");
 await fs.mkdir(tempDir, { recursive: true });
 
 const allowedExtensions = new Set([".pdf", ".png", ".jpg", ".jpeg"]);
@@ -92,6 +93,11 @@ app.use((request, response, next) => {
   next();
 });
 
+app.use(
+  [BASE_PATH + "/_next", "/_next"],
+  express.static(clientAssetsDir, { fallthrough: true, immutable: true, maxAge: "1y" }),
+);
+
 app.get(["/api/status", BASE_PATH + "/api/status"], async (_request, response) => {
   try {
     const { printers, selected } = await findPrinter();
@@ -129,10 +135,10 @@ app.use((error, _request, response, _next) => {
 });
 
 app.use((request, _response, next) => {
-  if (request.url === "/" || request.url.startsWith("/?")) {
-    request.url = BASE_PATH + "/" + request.url.slice(1);
-  } else if (request.url === BASE_PATH || request.url.startsWith(BASE_PATH + "?")) {
+  if (request.url === BASE_PATH || request.url.startsWith(BASE_PATH + "?")) {
     request.url = BASE_PATH + "/" + request.url.slice(BASE_PATH.length);
+  } else if (!request.url.startsWith(BASE_PATH + "/")) {
+    request.url = BASE_PATH + (request.url.startsWith("/") ? request.url : "/" + request.url);
   }
   next();
 });
