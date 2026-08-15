@@ -21,7 +21,7 @@ A private, extensible internal service portal styled after the AI Center Univers
 
 From another device signed into the same Tailscale network, open:
 
-`http://<printer-pc-tailscale-ip>:8788`
+`http://<printer-pc-tailscale-ip>:8788/service-hub/`
 
 Run `tailscale ip -4` on the printer PC to find its Tailscale address.
 
@@ -37,6 +37,17 @@ PRINTER_SERVICE_PORT=8788
 ```
 
 Set a PIN when the tailnet includes users who should not be able to print. Tailscale ACLs can further restrict which users or devices can reach port 8788.
+
+## Nginx subfolder
+
+The hub is configured to run below `/service-hub`. In Nginx Proxy Manager, add a custom location with:
+
+- Location: `/service-hub`
+- Scheme: `http`
+- Forward host: the printer PC address, for example `10.39.30.206`
+- Forward port: `8788`
+
+Keep the original `Host` header when proxying and set the request-body limit to at least 25 MB. The resulting address is `https://devel-ai.ub.ac.id/service-hub/`.
 
 ## Development
 

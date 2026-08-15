@@ -5,7 +5,10 @@ import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useRef, useS
 type HubStatus = { online: boolean; printer: string | null; availablePrinters: number; message?: string };
 type PrintJob = { id: string; fileName: string; status: "queued" | "printing" | "completed" | "failed"; createdAt: string; copies: number; error?: string };
 
-const apiBase = () => window.location.port === "8788" ? window.location.origin : `${window.location.protocol}//${window.location.hostname}:8788`;
+const serviceBasePath = "/service-hub";
+const apiBase = () => window.location.port === "3000"
+  ? `${window.location.protocol}//${window.location.hostname}:8788${serviceBasePath}/api`
+  : `${serviceBasePath}/api`;
 const fileTypes = ["application/pdf", "image/png", "image/jpeg"];
 
 function formatTime(value: string) {
@@ -30,8 +33,8 @@ export default function ServiceHub() {
   const refresh = useCallback(async () => {
     try {
       const [statusResponse, jobsResponse] = await Promise.all([
-        fetch(`${apiBase()}/api/status`),
-        fetch(`${apiBase()}/api/jobs`),
+        fetch(`${apiBase()}/status`),
+        fetch(`${apiBase()}/jobs`),
       ]);
       if (!statusResponse.ok) throw new Error("Printer service unavailable");
       setStatus(await statusResponse.json());
@@ -87,7 +90,7 @@ export default function ServiceHub() {
     payload.append("orientation", orientation);
     payload.append("monochrome", String(monochrome));
     try {
-      const response = await fetch(`${apiBase()}/api/print`, { method: "POST", headers: pin ? { "x-service-pin": pin } : {}, body: payload });
+      const response = await fetch(`${apiBase()}/print`, { method: "POST", headers: pin ? { "x-service-pin": pin } : {}, body: payload });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Unable to submit print job");
       setNotice(`Print job ${result.jobId.slice(0, 8)} added to the queue.`);

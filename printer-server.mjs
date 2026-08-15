@@ -16,6 +16,7 @@ const PORT = Number(process.env.PRINTER_SERVICE_PORT || 8788);
 const HOST = process.env.PRINTER_SERVICE_HOST || "0.0.0.0";
 const CONFIGURED_PRINTER = process.env.PRINTER_NAME || "EPSON L3110";
 const SERVICE_PIN = process.env.SERVICE_HUB_PIN || "";
+const BASE_PATH = "/service-hub";
 const tempDir = path.join(os.tmpdir(), "ai-center-service-hub");
 await fs.mkdir(tempDir, { recursive: true });
 
@@ -32,10 +33,12 @@ const upload = multer({
 const jobs = new Map();
 let queue = Promise.resolve();
 
-function isAllowedOrigin(origin) {
+function isAllowedOrigin(origin, requestHost) {
   if (!origin) return true;
   try {
-    const { hostname } = new URL(origin);
+    const parsedOrigin = new URL(origin);
+    const { hostname } = parsedOrigin;
+    if (requestHost && parsedOrigin.host === requestHost) return true;
     if (["localhost", "127.0.0.1", "::1"].includes(hostname) || hostname.endsWith(".ts.net") || !hostname.includes(".")) return true;
     const parts = hostname.split(".").map(Number);
     return parts.length === 4 && parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127;
@@ -79,16 +82,17 @@ const app = express();
 app.disable("x-powered-by");
 app.use((request, response, next) => {
   const origin = request.headers.origin;
-  if (origin && isAllowedOrigin(origin)) response.setHeader("Access-Control-Allow-Origin", origin);
+  const requestHost = request.headers.host;
+  if (origin && isAllowedOrigin(origin, requestHost)) response.setHeader("Access-Control-Allow-Origin", origin);
   response.setHeader("Vary", "Origin");
   response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Service-Pin");
   response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  if (request.method === "OPTIONS") return isAllowedOrigin(origin) ? response.sendStatus(204) : response.sendStatus(403);
-  if (!isAllowedOrigin(origin)) return response.status(403).json({ error: "This origin is not allowed" });
+  if (request.method === "OPTIONS") return isAllowedOrigin(origin, requestHost) ? response.sendStatus(204) : response.sendStatus(403);
+  if (!isAllowedOrigin(origin, requestHost)) return response.status(403).json({ error: "This origin is not allowed" });
   next();
 });
 
-app.get("/api/status", async (_request, response) => {
+app.get(["/api/status", BASE_PATH + "/api/status"], async (_request, response) => {
   try {
     const { printers, selected } = await findPrinter();
     response.json({ online: Boolean(selected), printer: selected?.name || null, availablePrinters: printers.length, pinRequired: Boolean(SERVICE_PIN) });
@@ -97,11 +101,11 @@ app.get("/api/status", async (_request, response) => {
   }
 });
 
-app.get("/api/jobs", (_request, response) => {
+app.get(["/api/jobs", BASE_PATH + "/api/jobs"], (_request, response) => {
   response.json({ jobs: Array.from(jobs.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 12).map(publicJob) });
 });
 
-app.post("/api/print", (request, response, next) => upload.single("document")(request, response, (error) => error ? next(error) : next()), (request, response) => {
+app.post(["/api/print", BASE_PATH + "/api/print"], (request, response, next) => upload.single("document")(request, response, (error) => error ? next(error) : next()), (request, response) => {
   if (SERVICE_PIN && request.headers["x-service-pin"] !== SERVICE_PIN) {
     if (request.file?.path) fs.unlink(request.file.path).catch(() => {});
     return response.status(401).json({ error: "Incorrect access PIN" });
@@ -117,13 +121,15 @@ app.post("/api/print", (request, response, next) => upload.single("document")(re
   response.status(202).json({ jobId: job.id, status: job.status });
 });
 
-app.use("/api", (_request, response) => response.status(404).json({ error: "Unknown API route" }));
+app.use(["/api", BASE_PATH + "/api"], (_request, response) => response.status(404).json({ error: "Unknown API route" }));
 
 app.use((error, _request, response, _next) => {
   const message = error instanceof multer.MulterError && error.code === "LIMIT_FILE_SIZE" ? "The maximum file size is 25 MB" : "The upload could not be processed";
   response.status(400).json({ error: message });
 });
 
+app.get("/", (_request, response) => response.redirect(302, BASE_PATH + "/"));
+app.get(BASE_PATH, (_request, response) => response.redirect(302, BASE_PATH + "/"));
 app.use(createProxyMiddleware({ target: process.env.WEB_SERVICE_URL || "http://localhost:3000", changeOrigin: true, ws: true }));
 
 app.listen(PORT, HOST, () => console.log(`Service Hub ready on http://${HOST}:${PORT} using ${CONFIGURED_PRINTER}`));
