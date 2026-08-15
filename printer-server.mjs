@@ -19,6 +19,7 @@ const SERVICE_PIN = process.env.SERVICE_HUB_PIN || "";
 const BASE_PATH = "/service-hub";
 const tempDir = path.join(os.tmpdir(), "ai-center-service-hub");
 const clientAssetsDir = path.join(process.cwd(), "dist", "client", "service-hub", "_next");
+const testPagePath = path.join(process.cwd(), "output", "pdf", "ai-center-printer-test-page.pdf");
 await fs.mkdir(tempDir, { recursive: true });
 
 const allowedExtensions = new Set([".pdf", ".png", ".jpg", ".jpeg"]);
@@ -40,9 +41,7 @@ function isAllowedOrigin(origin, requestHost) {
     const parsedOrigin = new URL(origin);
     const { hostname } = parsedOrigin;
     if (requestHost && parsedOrigin.host === requestHost) return true;
-    if (["localhost", "127.0.0.1", "::1"].includes(hostname) || hostname.endsWith(".ts.net") || !hostname.includes(".")) return true;
-    const parts = hostname.split(".").map(Number);
-    return parts.length === 4 && parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127;
+    return ["localhost", "127.0.0.1", "::1"].includes(hostname) || !hostname.includes(".");
   } catch { return false; }
 }
 
@@ -125,6 +124,24 @@ app.post(["/api/print", BASE_PATH + "/api/print"], (request, response, next) => 
   jobs.set(job.id, job);
   queueJob(job, { copies, paperSize, orientation, monochrome });
   response.status(202).json({ jobId: job.id, status: job.status });
+});
+
+app.post(["/api/test-print", BASE_PATH + "/api/test-print"], async (request, response) => {
+  if (SERVICE_PIN && request.headers["x-service-pin"] !== SERVICE_PIN) {
+    return response.status(401).json({ error: "Incorrect access PIN" });
+  }
+  try {
+    await fs.access(testPagePath);
+    const id = crypto.randomUUID();
+    const tempPath = path.join(tempDir, `${id}.pdf`);
+    await fs.copyFile(testPagePath, tempPath);
+    const job = { id, fileName: "AI-Center-Printer-Test-Page.pdf", tempPath, status: "queued", copies: 1, paperSize: "A4", orientation: "portrait", monochrome: false, createdAt: new Date().toISOString() };
+    jobs.set(job.id, job);
+    queueJob(job, { copies: 1, paperSize: "A4", orientation: "portrait", monochrome: false });
+    response.status(202).json({ jobId: job.id, status: job.status });
+  } catch (error) {
+    response.status(500).json({ error: error instanceof Error ? error.message : "The built-in test page is unavailable" });
+  }
 });
 
 app.use(["/api", BASE_PATH + "/api"], (_request, response) => response.status(404).json({ error: "Unknown API route" }));

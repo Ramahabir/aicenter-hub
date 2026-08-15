@@ -22,6 +22,7 @@ export default function ServiceHub() {
   const [status, setStatus] = useState<HubStatus>({ online: false, printer: null, availablePrinters: 0 });
   const [jobs, setJobs] = useState<PrintJob[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [notice, setNotice] = useState("");
   const [copies, setCopies] = useState(1);
   const [paperSize, setPaperSize] = useState("A4");
@@ -77,6 +78,23 @@ export default function ServiceHub() {
     acceptFile(event.dataTransfer.files[0]);
   }
 
+  async function submitTestPrint() {
+    if (!status.online) return setNotice("The Epson printer service is offline.");
+    setTesting(true);
+    setNotice("");
+    try {
+      const response = await fetch(`${apiBase()}/test-print`, { method: "POST", headers: pin ? { "x-service-pin": pin } : {} });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Unable to print the test page");
+      setNotice(`Test page ${result.jobId.slice(0, 8)} added to the queue.`);
+      await refresh();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Unable to print the test page");
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function submitPrint(event: FormEvent) {
     event.preventDefault();
     if (!file) return setNotice("Select a file first.");
@@ -116,7 +134,6 @@ export default function ServiceHub() {
         <nav aria-label="Primary navigation">
           <a className="active" href="#services">Services</a>
           <a href="#activity">Activity</a>
-          <span className="network-pill"><i /> Tailscale network</span>
         </nav>
       </header>
 
@@ -163,7 +180,7 @@ export default function ServiceHub() {
         </div>
       </section>
 
-      <footer><span>AI CENTER · UNIVERSITAS BRAWIJAYA</span><span>Private access via Tailscale</span></footer>
+      <footer><span>AI CENTER · UNIVERSITAS BRAWIJAYA</span><span>Secure access via Nginx</span></footer>
 
       {panelOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setPanelOpen(false)}>
         <section className="print-panel" role="dialog" aria-modal="true" aria-labelledby="print-title">
@@ -181,7 +198,7 @@ export default function ServiceHub() {
             </div>
             <div className="option-row"><label className="check-label"><input type="checkbox" checked={monochrome} onChange={(e) => setMonochrome(e.target.checked)} /><span /> Black & white</label><label className="pin-label">Access PIN <input type="password" inputMode="numeric" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="Only if configured" /></label></div>
             {notice && <div className="notice" role="status">{notice}</div>}
-            <div className="submit-row"><div><i className={status.online ? "" : "offline-dot"} /><span>{status.online ? `${printerName} is ready` : "Printer service is offline"}</span></div><button type="submit" disabled={submitting || !file}>{submitting ? "Submitting…" : "Send to printer"} <span>→</span></button></div>
+            <div className="submit-row"><div><i className={status.online ? "" : "offline-dot"} /><span>{status.online ? `${printerName} is ready` : "Printer service is offline"}</span></div><div className="submit-actions"><button className="test-print-button" type="button" onClick={submitTestPrint} disabled={testing || !status.online}>{testing ? "Printing test…" : "Print test page"}</button><button type="submit" disabled={submitting || !file}>{submitting ? "Submitting…" : "Send to printer"} <span>→</span></button></div></div>
           </form>
         </section>
       </div>}

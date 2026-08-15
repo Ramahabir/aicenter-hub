@@ -7,23 +7,20 @@ A private, extensible internal service portal styled after the AI Center Univers
 - Accepts PDF, PNG, and JPG files up to 25 MB.
 - Sends jobs to the Windows printer named `EPSON L3110`.
 - Supports A4, Letter, Legal, portrait/landscape, 1–20 copies, and monochrome.
+- Includes a built-in A4 diagnostic test page, so printer checks do not require an uploaded document.
 - Processes jobs one at a time and shows recent in-memory activity.
-- Exposes one local gateway on port `8788`, suitable for access through Tailscale.
+- Exposes one local gateway on port `8788` for the Nginx reverse proxy.
 - Can optionally require an access PIN.
 
 ## First-time setup
 
 1. Install the Epson L3110 Windows driver and confirm a normal Windows test page prints successfully.
-2. Install Node.js 22 or newer and Tailscale on the printer PC.
+2. Install Node.js 22 or newer on the printer PC.
 3. In this folder, run `npm install` and then `npm run build`.
 4. Copy `.env.example` to `.env` if the Windows printer name differs or you want an access PIN.
 5. Double-click `start-service-hub.cmd`.
 
-From another device signed into the same Tailscale network, open:
-
-`http://<printer-pc-tailscale-ip>:8788/service-hub/`
-
-Run `tailscale ip -4` on the printer PC to find its Tailscale address.
+After configuring Nginx, open `https://devel-ai.ub.ac.id/service-hub/`.
 
 ## Configuration
 
@@ -36,7 +33,7 @@ PRINTER_SERVICE_HOST=0.0.0.0
 PRINTER_SERVICE_PORT=8788
 ```
 
-Set a PIN when the tailnet includes users who should not be able to print. Tailscale ACLs can further restrict which users or devices can reach port 8788.
+Set a PIN when the domain includes users who should not be able to print. Restrict port 8788 at the Windows firewall so it accepts connections only from the Nginx server and the printer PC itself.
 
 ## Nginx subfolder
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render() {
@@ -32,5 +32,7 @@ test("keeps printer execution in the local service", async () => {
   assert.match(server, /SERVICE_HUB_PIN/);
   assert.ok(server.includes('const BASE_PATH = "/service-hub";'));
   assert.match(server, /express\.static\(clientAssetsDir/);
+  assert.match(server, /api\/test-print/);
+  await access(new URL("../output/pdf/ai-center-printer-test-page.pdf", import.meta.url));
   assert.deepEqual(JSON.parse(hosting), { d1: null, r2: null });
 });
