@@ -116,9 +116,19 @@ export default function ServiceHub() {
   const [cameraKey, setCameraKey] = useState(0);
   const [bambuTelemetry, setBambuTelemetry] = useState<BambuTelemetry | null>(null);
   const [jobs3D, setJobs3D] = useState<Bambu3DJob[]>([]);
-  const [activityTab, setActivityTab] = useState<"3d" | "2d">("3d");
+  const [activityTab, setActivityTab] = useState<"queue" | "3d" | "2d">("queue");
   const [activeHeroDevice, setActiveHeroDevice] = useState<"3d" | "2d" | "both">("3d");
-  const successful3DJobs = jobs3D.filter((j) => j.status === "completed");
+  const successful3DJobs = useMemo(() => jobs3D.filter((j) => j.status === "completed"), [jobs3D]);
+  const active3DQueue = useMemo(() => {
+    const active = jobs3D.filter((j) => ["printing", "approved", "pending_review"].includes(j.status));
+    const rank: Record<string, number> = { printing: 0, approved: 1, pending_review: 2 };
+    return active.sort((a, b) => {
+      const rA = rank[a.status] ?? 99;
+      const rB = rank[b.status] ?? 99;
+      if (rA !== rB) return rA - rB;
+      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
+  }, [jobs3D]);
   
   // 3D Order Form State
   const [file3D, setFile3D] = useState<File | null>(null);
@@ -926,10 +936,17 @@ export default function ServiceHub() {
             <div className="activity-tabs-row">
               <button
                 type="button"
+                className={`act-tab-btn ${activityTab === "queue" ? "active" : ""}`}
+                onClick={() => setActivityTab("queue")}
+              >
+                ⏳ 3D Print Queue {active3DQueue.length > 0 ? `(${active3DQueue.length})` : ""}
+              </button>
+              <button
+                type="button"
                 className={`act-tab-btn ${activityTab === "3d" ? "active" : ""}`}
                 onClick={() => setActivityTab("3d")}
               >
-                🧊 Successful 3D Prints (Last 10)
+                🧊 Completed 3D Prints ({successful3DJobs.length})
               </button>
               <button
                 type="button"
@@ -951,7 +968,107 @@ export default function ServiceHub() {
           </div>
         </div>
 
-        {activityTab === "3d" ? (
+        {activityTab === "queue" ? (
+          <div className="activity-table">
+            <div className="activity-3d-head">
+              <span>QUEUE # / MODEL</span>
+              <span>BOOKED BY</span>
+              <span>SPECS</span>
+              <span>BOOKED AT</span>
+              <span>QUEUE STATUS</span>
+              <span style={{ textAlign: "right" }}>ACTION</span>
+            </div>
+            {active3DQueue.length > 0 ? (
+              active3DQueue.map((j, idx) => {
+                const isPrinting = j.status === "printing" || (idx === 0 && p1sPrinting);
+                return (
+                  <div className="activity-3d-row" key={j.id} style={{ background: isPrinting ? "rgba(0, 79, 134, 0.02)" : undefined }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: "24px",
+                            height: "24px",
+                            borderRadius: "50%",
+                            background: isPrinting ? "var(--bright)" : "var(--orange)",
+                            color: "white",
+                            fontSize: "11px",
+                            fontWeight: 800,
+                            flexShrink: 0,
+                          }}
+                        >
+                          #{idx + 1}
+                        </span>
+                        <span className="code-pill">{j.trackingCode}</span>
+                        <strong style={{ color: "var(--ink)", wordBreak: "break-all" }}>{j.fileName}</strong>
+                      </div>
+                      <small style={{ color: "var(--muted)", fontSize: "11px", marginLeft: "32px" }}>
+                        {j.volumeCm3 ? `${j.volumeCm3.toFixed(1)} cm³ · ` : ""}
+                        {j.estimatedWeightGrams ? `~${j.estimatedWeightGrams.toFixed(0)}g · ` : ""}
+                        {j.estimatedHours ? `~${j.estimatedHours}h duration` : ""}
+                      </small>
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 600, color: "var(--ink)" }}>{j.customerName || "Anonymous"}</div>
+                      <small style={{ color: "var(--muted)" }}>{j.customerDept || "General UB"}</small>
+                    </div>
+                    <div>
+                      <span style={{ fontWeight: 600, color: "var(--ink)" }}>{j.filamentType}</span>
+                      <span style={{ color: "var(--muted)" }}> ({j.color || "Default"})</span>
+                      <div style={{ fontSize: "11px", color: "var(--muted)" }}>{j.infill}% infill · {j.quality}</div>
+                    </div>
+                    <div>
+                      <span>{formatTime(j.createdAt)}</span>
+                    </div>
+                    <div>
+                      {isPrinting ? (
+                        <span className="job-status printing">
+                          <i /> Printing ({bambuTelemetry?.progressPercent || 0}%)
+                        </span>
+                      ) : j.status === "approved" ? (
+                        <span className="job-status queued">
+                          <i /> Next in Line (#{idx + 1})
+                        </span>
+                      ) : (
+                        <span className="job-status queued">
+                          <i /> In Review (#{idx + 1})
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <button
+                        type="button"
+                        className="btn-track-row"
+                        onClick={() => openTrackingForCode(j.trackingCode)}
+                      >
+                        Track 🔍
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="empty-activity" style={{ padding: "40px 24px", textAlign: "center" }}>
+                <div style={{ fontSize: "36px", marginBottom: "8px" }}>🧊</div>
+                <b>No prints in queue right now</b>
+                <span style={{ display: "block", margin: "6px 0 16px", color: "var(--muted)" }}>
+                  The 3D print queue is currently clear! Submit your 3D model to be #1 in line.
+                </span>
+                <button
+                  type="button"
+                  className="primary-button"
+                  style={{ display: "inline-flex", margin: "0 auto", padding: "8px 18px", fontSize: "13px" }}
+                  onClick={() => setBambuModalOpen(true)}
+                >
+                  Submit 3D Model Now →
+                </button>
+              </div>
+            )}
+          </div>
+        ) : activityTab === "3d" ? (
           <div className="activity-table">
             <div className="activity-3d-head">
               <span>ORDER / MODEL</span>
@@ -1096,13 +1213,25 @@ export default function ServiceHub() {
             {submittedCode ? (
               <div style={{ padding: "34px" }}>
                 <div className="notice" style={{ background: "#eaf8f1", borderLeftColor: "#168557", color: "#168557" }}>
-                  <strong>✓ Order successfully queued!</strong>
+                  <strong>✓ Order successfully booked into the 3D queue!</strong>
                   <p style={{ margin: "8px 0" }}>
-                    Your 3D print request has been registered in the AI Center queue. Keep your tracking code below to check real-time progress:
+                    Your 3D print request has been booked. You and your friends can track the live queue position at any time:
                   </p>
-                  <div style={{ fontSize: "28px", fontWeight: 900, letterSpacing: "0.08em", padding: "12px", background: "white", display: "inline-block", border: "2px dashed #168557", margin: "10px 0" }}>
+                  <div style={{ fontSize: "28px", fontWeight: 900, letterSpacing: "0.08em", padding: "12px 18px", background: "white", display: "inline-block", border: "2px dashed #168557", margin: "10px 0" }}>
                     {submittedCode}
                   </div>
+                  {(() => {
+                    const pos = active3DQueue.findIndex((q) => q.trackingCode === submittedCode) + 1;
+                    if (pos > 0) {
+                      return (
+                        <div style={{ marginTop: "10px", padding: "8px 12px", background: "rgba(22, 133, 87, 0.08)", borderRadius: "6px", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: 600 }}>
+                          <span style={{ padding: "3px 8px", background: "#168557", color: "white", borderRadius: "10px", fontSize: "12px", fontWeight: 800 }}>Queue #{pos}</span>
+                          <span>{pos === 1 ? "Your model is next in line to print!" : `${pos - 1} order${pos - 1 > 1 ? "s" : ""} currently ahead of yours in queue.`}</span>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
                 <div style={{ display: "flex", gap: "12px", marginTop: "24px" }}>
                   <button
@@ -1385,6 +1514,82 @@ export default function ServiceHub() {
                     </div>
                     <span className={`badge-status ${trackedJob.status}`}>{trackedJob.status.replace("_", " ")}</span>
                   </div>
+
+                  {/* Queue Position Banner */}
+                  {(() => {
+                    if (trackedJob.status === "completed" || trackedJob.status === "cancelled") return null;
+                    const qIndex = active3DQueue.findIndex((q) => q.id === trackedJob.id);
+                    const pos = qIndex !== -1 ? qIndex + 1 : null;
+                    const isPrinting = trackedJob.status === "printing" || (pos === 1 && p1sPrinting);
+                    return (
+                      <div
+                        style={{
+                          margin: "16px 0 10px",
+                          padding: "14px 18px",
+                          borderRadius: "8px",
+                          background: isPrinting ? "#eef6ff" : "#fff8ee",
+                          border: `1px solid ${isPrinting ? "#b9daff" : "#fed8a6"}`,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          flexWrap: "wrap",
+                          gap: "10px",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              width: "36px",
+                              height: "36px",
+                              borderRadius: "50%",
+                              background: isPrinting ? "var(--bright)" : "var(--orange)",
+                              color: "white",
+                              fontWeight: 900,
+                              fontSize: "15px",
+                              flexShrink: 0,
+                            }}
+                          >
+                            {pos ? `#${pos}` : "•"}
+                          </span>
+                          <div>
+                            <strong style={{ color: "var(--ink)", display: "block", fontSize: "14px" }}>
+                              {isPrinting
+                                ? "Queue Position #1 · Currently Printing on Bambu P1S"
+                                : pos === 1
+                                ? "Queue Position #1 · Up Next"
+                                : pos
+                                ? `Queue Position #${pos} in line`
+                                : "Registered in 3D Print System"}
+                            </strong>
+                            <small style={{ color: "var(--muted)", fontSize: "12px" }}>
+                              {isPrinting
+                                ? `Live progress: ${bambuTelemetry?.progressPercent || 0}% · ~${formatRemainingTime(bambuTelemetry?.remainingMinutes || 0)} remaining`
+                                : pos && pos > 1
+                                ? `There ${pos - 1 === 1 ? "is 1 print" : `are ${pos - 1} prints`} ahead of your booking in the queue`
+                                : "Operator is preparing your job for the print bed"}
+                            </small>
+                          </div>
+                        </div>
+                        <span
+                          style={{
+                            padding: "4px 10px",
+                            borderRadius: "12px",
+                            background: isPrinting ? "#004f86" : "#ed8b00",
+                            color: "white",
+                            fontSize: "11px",
+                            fontWeight: 700,
+                            textTransform: "uppercase",
+                            letterSpacing: "0.05em",
+                          }}
+                        >
+                          {isPrinting ? "Printing ⚡" : "In Queue ⏳"}
+                        </span>
+                      </div>
+                    );
+                  })()}
 
                   {/* Step Timeline */}
                   <div className="track-timeline">
