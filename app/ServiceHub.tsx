@@ -463,21 +463,11 @@ export default function ServiceHub() {
     }
   }
 
-  // Admin: Open in Bambu Studio
-  async function handleOpenStudio(jobId: string) {
-    setOpeningStudioId(jobId);
   // Admin: Open in Bambu Studio locally on PC
   async function handleOpenStudio(job: Bambu3DJob) {
     setOpeningStudioId(job.id);
     setAdminNotice("");
     try {
-      const res = await fetch(`${apiBase()}/bambu/jobs/${jobId}/open-studio`, {
-        method: "POST",
-        headers: pin ? { "x-service-pin": pin } : {},
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to launch Bambu Studio");
-      setAdminNotice("Bambu Studio launched on PC with the 3D model pre-loaded.");
       const downloadUrl = `${window.location.origin}${apiBase()}/bambu/jobs/${job.id}/download`;
 
       // 1. Direct browser download with proper original file name
@@ -1792,7 +1782,6 @@ export default function ServiceHub() {
                   </label>
                   <button className="text-button" onClick={refresh3DJobs}>Refresh Queue ↻</button>
                 </div>
-                <div>
                 <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
                   <a
                     href="/service-hub/setup-bambu-launcher.cmd"
@@ -1864,15 +1853,12 @@ export default function ServiceHub() {
                           </td>
                           <td>
                             <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                              {/* 1-Click Launch Bambu Studio */}
                               {/* 1-Click Launch Bambu Studio on PC */}
                               <button
                                 type="button"
                                 className="btn-studio"
-                                title="Open this model in Bambu Studio"
                                 title="Open this model in Bambu Studio on your PC"
                                 disabled={openingStudioId === j.id}
-                                onClick={() => handleOpenStudio(j.id)}
                                 onClick={() => handleOpenStudio(j)}
                               >
                                 {openingStudioId === j.id ? "Opening…" : "🖥 Bambu Studio"}

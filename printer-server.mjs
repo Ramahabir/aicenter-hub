@@ -300,11 +300,9 @@ app.post(
     }
     try {
       const result = await launchBambuStudio(request.params.id);
-      response.json(result);
       const downloadUrl = `${BASE_PATH}/api/bambu/jobs/${request.params.id}/download`;
       response.json({ ...result, downloadUrl });
     } catch (err) {
-      response.status(500).json({ error: err instanceof Error ? err.message : "Failed to open Bambu Studio" });
       response.status(500).json({ error: err instanceof Error ? err.message : "Failed to prepare Bambu Studio file" });
     }
   }
