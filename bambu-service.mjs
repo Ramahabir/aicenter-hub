@@ -367,34 +367,28 @@ export async function update3DJobStatus(id, newStatus, adminNote = "") {
   return job;
 }
 
+export async function get3DJob(id) {
+  const jobs = await loadJobs();
+  return jobs.find((j) => j.id === id || j.trackingCode === id);
+}
+
 export async function launchBambuStudio(jobId) {
   const jobs = await loadJobs();
   const job = jobs.find((j) => j.id === jobId);
   if (!job) throw new Error("Job not found");
 
   try {
-    await fs.access(job.filePath);
-  } catch {
-    throw new Error(`Model file not found at ${job.filePath}`);
-  }
-
-  try {
     await fs.access(BAMBU_STUDIO_PATH);
+    console.log(`[Bambu Service] Opening ${job.filePath} in Bambu Studio...`);
+    const child = spawn(BAMBU_STUDIO_PATH, [job.filePath], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+    return { success: true, localLaunched: true, fileName: job.fileName, message: "Bambu Studio launched successfully with 3D model" };
   } catch {
-    throw new Error(
-      `Bambu Studio executable not found at "${BAMBU_STUDIO_PATH}". Please set BAMBU_STUDIO_PATH in .env.`
-    );
+    return { success: true, localLaunched: false, fileName: job.fileName, message: "Server is remote (Hermes). File ready for client-side Bambu Studio." };
   }
-
-  console.log(`[Bambu Service] Opening ${job.filePath} in Bambu Studio...`);
-  const child = spawn(BAMBU_STUDIO_PATH, [job.filePath], {
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
-
-  return { success: true, message: "Bambu Studio launched successfully with 3D model" };
 }
 
 export { UPLOAD_DIR };
-

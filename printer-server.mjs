@@ -14,6 +14,7 @@ import {
   create3DJob,
   list3DJobs,
   update3DJobStatus,
+  get3DJob,
   launchBambuStudio,
   UPLOAD_DIR,
 } from "./bambu-service.mjs";
@@ -265,6 +266,32 @@ app.post(["/api/admin/verify", BASE_PATH + "/api/admin/verify"], (request, respo
   return response.status(401).json({ ok: false, error: "Incorrect admin password" });
 });
 
+app.get(
+  ["/api/bambu/jobs/:id/download", BASE_PATH + "/api/bambu/jobs/:id/download"],
+  async (request, response) => {
+    try {
+      const job = await get3DJob(request.params.id);
+      if (!job) return response.status(404).json({ error: "Job not found" });
+      if (!job.filePath) return response.status(404).json({ error: "Job has no associated file" });
+
+      let filePath = job.filePath;
+      if (!path.isAbsolute(filePath)) {
+        filePath = path.join(process.cwd(), filePath);
+      }
+
+      try {
+        await fs.access(filePath);
+      } catch {
+        return response.status(404).json({ error: "File not found on storage" });
+      }
+
+      response.download(filePath, job.fileName);
+    } catch (err) {
+      response.status(500).json({ error: err instanceof Error ? err.message : "Download failed" });
+    }
+  }
+);
+
 app.post(
   ["/api/bambu/jobs/:id/open-studio", BASE_PATH + "/api/bambu/jobs/:id/open-studio"],
   async (request, response) => {
@@ -273,9 +300,10 @@ app.post(
     }
     try {
       const result = await launchBambuStudio(request.params.id);
-      response.json(result);
+      const downloadUrl = `${BASE_PATH}/api/bambu/jobs/${request.params.id}/download`;
+      response.json({ ...result, downloadUrl });
     } catch (err) {
-      response.status(500).json({ error: err instanceof Error ? err.message : "Failed to open Bambu Studio" });
+      response.status(500).json({ error: err instanceof Error ? err.message : "Failed to prepare Bambu Studio file" });
     }
   }
 );

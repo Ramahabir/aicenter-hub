@@ -463,18 +463,34 @@ export default function ServiceHub() {
     }
   }
 
-  // Admin: Open in Bambu Studio
-  async function handleOpenStudio(jobId: string) {
-    setOpeningStudioId(jobId);
+  // Admin: Open in Bambu Studio locally on PC
+  async function handleOpenStudio(job: Bambu3DJob) {
+    setOpeningStudioId(job.id);
     setAdminNotice("");
     try {
-      const res = await fetch(`${apiBase()}/bambu/jobs/${jobId}/open-studio`, {
-        method: "POST",
-        headers: pin ? { "x-service-pin": pin } : {},
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to launch Bambu Studio");
-      setAdminNotice("Bambu Studio launched on PC with the 3D model pre-loaded.");
+      const downloadUrl = `${window.location.origin}${apiBase()}/bambu/jobs/${job.id}/download`;
+
+      // 1. Direct browser download with proper original file name
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = job.fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      // 2. Launch registered local protocol handler (aicenter-bambu://)
+      const protocolUrl = `aicenter-bambu://open?url=${encodeURIComponent(downloadUrl)}&file=${encodeURIComponent(job.fileName)}`;
+      const iframe = document.createElement("iframe");
+      iframe.style.display = "none";
+      iframe.src = protocolUrl;
+      document.body.appendChild(iframe);
+      setTimeout(() => {
+        try {
+          document.body.removeChild(iframe);
+        } catch {}
+      }, 2000);
+
+      setAdminNotice(`📥 Opening "${job.fileName}" on your PC! If Bambu Studio doesn't open automatically, click the downloaded file in your browser's download shelf.`);
     } catch (err) {
       setAdminNotice(err instanceof Error ? err.message : "Failed to open Bambu Studio");
     } finally {
@@ -1766,7 +1782,25 @@ export default function ServiceHub() {
                   </label>
                   <button className="text-button" onClick={refresh3DJobs}>Refresh Queue ↻</button>
                 </div>
-                <div>
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                  <a
+                    href="/service-hub/setup-bambu-launcher.cmd"
+                    download="setup-bambu-launcher.cmd"
+                    className="text-button"
+                    style={{
+                      padding: "4px 10px",
+                      fontSize: "11px",
+                      textDecoration: "none",
+                      background: "#f0f7ff",
+                      color: "#0066cc",
+                      border: "1px solid #cce3ff",
+                      borderRadius: "4px",
+                      fontWeight: 700,
+                    }}
+                    title="Download 1-click setup script to register Bambu Studio launcher on this Windows PC"
+                  >
+                    ⚡ Setup 1-Click PC Launcher
+                  </a>
                   <small style={{ color: "var(--muted)" }}>Total Jobs: {jobs3D.length}</small>
                 </div>
               </div>
@@ -1819,16 +1853,39 @@ export default function ServiceHub() {
                           </td>
                           <td>
                             <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                              {/* 1-Click Launch Bambu Studio */}
+                              {/* 1-Click Launch Bambu Studio on PC */}
                               <button
                                 type="button"
                                 className="btn-studio"
-                                title="Open this model in Bambu Studio"
+                                title="Open this model in Bambu Studio on your PC"
                                 disabled={openingStudioId === j.id}
-                                onClick={() => handleOpenStudio(j.id)}
+                                onClick={() => handleOpenStudio(j)}
                               >
                                 {openingStudioId === j.id ? "Opening…" : "🖥 Bambu Studio"}
                               </button>
+
+                              {/* Direct Download */}
+                              <a
+                                href={`${apiBase()}/bambu/jobs/${j.id}/download`}
+                                download={j.fileName}
+                                className="text-button"
+                                style={{
+                                  padding: "5px 8px",
+                                  fontSize: "11px",
+                                  textDecoration: "none",
+                                  background: "#f3f4f6",
+                                  color: "var(--ink)",
+                                  borderRadius: "3px",
+                                  border: "1px solid var(--border)",
+                                  fontWeight: 600,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "3px",
+                                }}
+                                title={`Direct download ${j.fileName} to PC`}
+                              >
+                                📥 Save
+                              </a>
 
                               {/* Status update selector */}
                               <select
