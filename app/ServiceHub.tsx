@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { analyzeSTL, STLAnalysisResult } from "./lib/stl-analyzer";
 
 type HubStatus = { online: boolean; printer: string | null; availablePrinters: number; message?: string };
