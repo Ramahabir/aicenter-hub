@@ -8,14 +8,30 @@ import express from "express";
 import multer from "multer";
 import { createProxyMiddleware } from "http-proxy-middleware";
 import printerTools from "pdf-to-printer";
+import {
+  initBambuMqtt,
+  getBambuTelemetry,
+  create3DJob,
+  list3DJobs,
+  update3DJobStatus,
+  launchBambuStudio,
+  UPLOAD_DIR,
+} from "./bambu-service.mjs";
+import {
+  initBambuCamera,
+  handleCameraStream,
+  handleCameraSnapshot,
+} from "./bambu-camera.mjs";
 
 const { print } = printerTools;
 const execFileAsync = promisify(execFile);
 
-const PORT = Number(process.env.PRINTER_SERVICE_PORT || 8788);
+const PORT = Number(process.env.PRINTER_SERVICE_PORT || 3000);
 const HOST = process.env.PRINTER_SERVICE_HOST || "0.0.0.0";
+const WEB_SERVICE_PORT = Number(process.env.WEB_SERVICE_PORT || 3001);
+const WEB_SERVICE_URL = process.env.WEB_SERVICE_URL || `http://localhost:${WEB_SERVICE_PORT}`;
 const CONFIGURED_PRINTER = process.env.PRINTER_NAME || "EPSON L3110";
-const SERVICE_PIN = process.env.SERVICE_HUB_PIN || "";
+const SERVICE_PIN = process.env.SERVICE_HUB_PIN || "aicenter88gacor";
 const BASE_PATH = "/service-hub";
 const tempDir = path.join(os.tmpdir(), "ai-center-service-hub");
 const clientAssetsDir = path.join(process.cwd(), "dist", "client", "service-hub", "_next");
@@ -32,6 +48,18 @@ const upload = multer({
   fileFilter: (_request, file, callback) => callback(null, allowedExtensions.has(path.extname(file.originalname).toLowerCase())),
 });
 
+const allowed3DExtensions = new Set([".stl", ".3mf", ".obj", ".step", ".stp"]);
+const upload3D = multer({
+  storage: multer.diskStorage({
+    destination: UPLOAD_DIR,
+    filename: (_request, file, callback) =>
+      callback(null, `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  limits: { fileSize: 100 * 1024 * 1024, files: 1 },
+  fileFilter: (_request, file, callback) =>
+    callback(null, allowed3DExtensions.has(path.extname(file.originalname).toLowerCase())),
+});
+
 const jobs = new Map();
 let queue = Promise.resolve();
 
@@ -41,11 +69,15 @@ function isAllowedOrigin(origin, requestHost) {
     const parsedOrigin = new URL(origin);
     const { hostname } = parsedOrigin;
     if (requestHost && parsedOrigin.host === requestHost) return true;
+    if (hostname.endsWith(".ub.ac.id") || hostname === "ub.ac.id") return true;
     return ["localhost", "127.0.0.1", "::1"].includes(hostname) || !hostname.includes(".");
   } catch { return false; }
 }
 
 async function findPrinter() {
+  if (process.platform !== "win32") {
+    return { printers: [], selected: null };
+  }
   const command = "Get-CimInstance Win32_Printer -Property DeviceID,Name,PrinterPaperNames | Select-Object DeviceID,Name,PrinterPaperNames | ConvertTo-Json -Compress -Depth 4";
   const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { encoding: "utf8", maxBuffer: 1024 * 1024 });
   const parsed = stdout.trim() ? JSON.parse(stdout) : [];
@@ -91,11 +123,17 @@ app.use((request, response, next) => {
   if (!isAllowedOrigin(origin, requestHost)) return response.status(403).json({ error: "This origin is not allowed" });
   next();
 });
+app.use(express.json());
 
 app.use(
   [BASE_PATH + "/_next", "/_next"],
   express.static(clientAssetsDir, { fallthrough: true, immutable: true, maxAge: "1y" }),
 );
+
+const faviconPath = path.join(process.cwd(), "public", "favicon.svg");
+app.get(["/favicon.svg", BASE_PATH + "/favicon.svg", "/favicon.ico", BASE_PATH + "/favicon.ico"], (_request, response) => {
+  response.type("image/svg+xml").sendFile(faviconPath);
+});
 
 app.get(["/api/status", BASE_PATH + "/api/status"], async (_request, response) => {
   try {
@@ -144,6 +182,121 @@ app.post(["/api/test-print", BASE_PATH + "/api/test-print"], async (request, res
   }
 });
 
+app.post(["/api/admin/verify", BASE_PATH + "/api/admin/verify"], (request, response) => {
+  const { password } = request.body || {};
+  if (password === SERVICE_PIN) {
+    return response.json({ ok: true, message: "Admin access granted" });
+  }
+  return response.status(401).json({ ok: false, error: "Incorrect admin password" });
+});
+
+app.get(["/api/bambu/status", BASE_PATH + "/api/bambu/status"], (_request, response) => {
+  response.json({ telemetry: getBambuTelemetry() });
+});
+
+app.get(["/api/bambu/camera.mjpeg", BASE_PATH + "/api/bambu/camera.mjpeg"], (request, response) => {
+  handleCameraStream(request, response);
+});
+
+app.get(["/api/bambu/camera.jpg", BASE_PATH + "/api/bambu/camera.jpg"], (request, response) => {
+  handleCameraSnapshot(request, response);
+});
+
+app.post(
+  ["/api/bambu/jobs", BASE_PATH + "/api/bambu/jobs"],
+  (request, response, next) =>
+    upload3D.single("model3d")(request, response, (err) => (err ? next(err) : next())),
+  async (request, response) => {
+    if (!request.file) {
+      return response.status(400).json({ error: "Select a 3D model file (.stl, .3mf, .obj, .step)" });
+    }
+    try {
+      let dimensions = { x: 0, y: 0, z: 0 };
+      try {
+        if (request.body.dimensions) dimensions = JSON.parse(request.body.dimensions);
+      } catch {}
+
+      const job = await create3DJob({
+        fileName: path.basename(request.file.originalname),
+        fileSize: request.file.size,
+        filePath: request.file.path,
+        customerName: request.body.customerName || "Anonymous",
+        customerPhone: request.body.customerPhone || "",
+        customerDept: request.body.customerDept || "",
+        customerNotes: request.body.customerNotes || "",
+        filamentType: request.body.filamentType || "PLA",
+        color: request.body.color || "White",
+        infill: Number(request.body.infill) || 20,
+        quality: request.body.quality || "0.20mm Standard",
+        supports: request.body.supports || "auto",
+        dimensions,
+        volumeCm3: Number(request.body.volumeCm3) || 0,
+        estimatedWeightGrams: Number(request.body.estimatedWeightGrams) || 0,
+        estimatedHours: Number(request.body.estimatedHours) || 0,
+        estimatedPriceRp: Number(request.body.estimatedPriceRp) || 0,
+      });
+
+      response.status(201).json({ job });
+    } catch (err) {
+      response.status(500).json({ error: err instanceof Error ? err.message : "Failed to create 3D job" });
+    }
+  }
+);
+
+app.get(["/api/bambu/jobs", BASE_PATH + "/api/bambu/jobs"], async (request, response) => {
+  try {
+    const trackingCode = typeof request.query.trackingCode === "string" ? request.query.trackingCode : undefined;
+    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    const jobs = await list3DJobs({ trackingCode, status });
+    response.json({ jobs });
+  } catch (err) {
+    response.status(500).json({ error: err instanceof Error ? err.message : "Failed to fetch 3D jobs" });
+  }
+});
+
+app.post(["/api/admin/verify", BASE_PATH + "/api/admin/verify"], (request, response) => {
+  const { password } = request.body || {};
+  if (!password) {
+    return response.status(400).json({ ok: false, error: "Password is required" });
+  }
+  if (password === SERVICE_PIN) {
+    return response.json({ ok: true });
+  }
+  return response.status(401).json({ ok: false, error: "Incorrect admin password" });
+});
+
+app.post(
+  ["/api/bambu/jobs/:id/open-studio", BASE_PATH + "/api/bambu/jobs/:id/open-studio"],
+  async (request, response) => {
+    if (SERVICE_PIN && request.headers["x-service-pin"] !== SERVICE_PIN) {
+      return response.status(401).json({ error: "Incorrect access PIN" });
+    }
+    try {
+      const result = await launchBambuStudio(request.params.id);
+      response.json(result);
+    } catch (err) {
+      response.status(500).json({ error: err instanceof Error ? err.message : "Failed to open Bambu Studio" });
+    }
+  }
+);
+
+app.patch(
+  ["/api/bambu/jobs/:id/status", BASE_PATH + "/api/bambu/jobs/:id/status"],
+  async (request, response) => {
+    if (SERVICE_PIN && request.headers["x-service-pin"] !== SERVICE_PIN) {
+      return response.status(401).json({ error: "Incorrect access PIN" });
+    }
+    try {
+      const { status, adminNote } = request.body || {};
+      if (!status) return response.status(400).json({ error: "Missing status" });
+      const job = await update3DJobStatus(request.params.id, status, adminNote);
+      response.json({ job });
+    } catch (err) {
+      response.status(500).json({ error: err instanceof Error ? err.message : "Failed to update status" });
+    }
+  }
+);
+
 app.use(["/api", BASE_PATH + "/api"], (_request, response) => response.status(404).json({ error: "Unknown API route" }));
 
 app.use((error, _request, response, _next) => {
@@ -159,6 +312,20 @@ app.use((request, _response, next) => {
   }
   next();
 });
-app.use(createProxyMiddleware({ target: process.env.WEB_SERVICE_URL || "http://localhost:3000", changeOrigin: true, ws: true }));
+app.use(createProxyMiddleware({ target: WEB_SERVICE_URL, changeOrigin: true, ws: true }));
+
+if (process.platform === "win32") {
+  import("./scripts/bambu-bridge.mjs").catch(() => {});
+}
+
+initBambuMqtt().catch(console.error);
+initBambuCamera();
 
 app.listen(PORT, HOST, () => console.log(`Service Hub ready on http://${HOST}:${PORT} using ${CONFIGURED_PRINTER}`));
+if (PORT !== 8788) {
+  try {
+    app.listen(8788, HOST, () => console.log(`Service Hub gateway also listening on http://${HOST}:8788`));
+  } catch (err) {
+    console.warn("Could not bind secondary port 8788:", err.message);
+  }
+}

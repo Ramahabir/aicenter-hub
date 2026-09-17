@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import ServiceHub from "./ServiceHub";
 
 export const metadata: Metadata = {
-  title: "Service Hub | AI Center UB",
+  title: "Service Hub | AI Center Hub",
   description: "Private digital services for the AI Center Universitas Brawijaya team.",
 };
 

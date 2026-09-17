@@ -13,7 +13,7 @@ test("renders the AI Center Service Hub below its Nginx base path", async () => 
   const response = await render();
   assert.equal(response.status, 200);
   const html = await response.text();
-  assert.match(html, /Service Hub \| AI Center UB/i);
+  assert.match(html, /Service Hub \| AI Center (UB|Hub)/i);
   assert.match(html, /One hub\./i);
   assert.match(html, /Remote Printing/i);
   assert.match(html, /service-hub\/_next/i);
