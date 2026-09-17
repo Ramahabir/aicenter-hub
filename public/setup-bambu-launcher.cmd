@@ -60,3 +60,4 @@ echo   Clicking "Bambu Studio" in Service Hub will now open models locally.
 echo ======================================================================
 echo.
 pause
+
