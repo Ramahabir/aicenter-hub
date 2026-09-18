@@ -2,6 +2,7 @@
 
 import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { analyzeSTL, STLAnalysisResult } from "./lib/stl-analyzer";
+import ModelViewer3D from "./components/ModelViewer3D";
 
 type HubStatus = { online: boolean; printer: string | null; availablePrinters: number; message?: string };
 type PrintJob = { id: string; fileName: string; status: "queued" | "printing" | "completed" | "failed"; createdAt: string; copies: number; error?: string };
@@ -91,6 +92,25 @@ function getStatusLabel(status: string) {
   return status;
 }
 
+/** Returns actual elapsed hours for completed jobs (from timestamps),
+ *  or estimatedHours for jobs still in queue/printing. */
+function getActualHours(job: { status: string; createdAt: string; completedAt?: string; estimatedHours?: number }): number | null {
+  if (job.status === "completed" && job.completedAt) {
+    const ms = new Date(job.completedAt).getTime() - new Date(job.createdAt).getTime();
+    return Math.round((ms / 1000 / 3600) * 10) / 10; // 1 decimal
+  }
+  return job.estimatedHours ?? null;
+}
+
+/** Formats hours as e.g. "2h 6m" */
+function formatHours(hours: number): string {
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
 export default function ServiceHub() {
   // 2D Printer State
   const [panelOpen, setPanelOpen] = useState(false);
@@ -117,7 +137,7 @@ export default function ServiceHub() {
   const [bambuTelemetry, setBambuTelemetry] = useState<BambuTelemetry | null>(null);
   const [jobs3D, setJobs3D] = useState<Bambu3DJob[]>([]);
   const [activityTab, setActivityTab] = useState<"queue" | "3d" | "2d">("queue");
-  const [activeHeroDevice, setActiveHeroDevice] = useState<"3d" | "2d" | "both">("3d");
+  const [activeHeroDevice, setActiveHeroDevice] = useState<"3d" | "2d">("3d");
   const successful3DJobs = useMemo(() => jobs3D.filter((j) => j.status === "completed"), [jobs3D]);
   const active3DQueue = useMemo(() => {
     const active = jobs3D.filter((j) => ["printing", "approved", "pending_review"].includes(j.status));
@@ -676,26 +696,11 @@ export default function ServiceHub() {
               <span>📄</span> Epson L3110
               {status.online && <i className="switcher-dot" />}
             </button>
-            <button
-              type="button"
-              className={`switcher-btn ${activeHeroDevice === "both" ? "active" : ""}`}
-              onClick={() => setActiveHeroDevice("both")}
-              role="tab"
-              aria-selected={activeHeroDevice === "both"}
-            >
-              <span>⇄</span> Both
-            </button>
           </div>
 
           {/* Printer Visual Illustration Area */}
           {activeHeroDevice === "3d" && renderBambuVisual()}
           {activeHeroDevice === "2d" && renderEpsonVisual()}
-          {activeHeroDevice === "both" && (
-            <div className="dual-visual-wrap">
-              {renderBambuVisual(true)}
-              {renderEpsonVisual(true)}
-            </div>
-          )}
 
           {/* 2D Epson Device */}
           <div
@@ -1041,9 +1046,17 @@ export default function ServiceHub() {
                     </div>
                     <div>
                       {isPrinting ? (
-                        <span className="job-status printing">
-                          <i /> Printing ({bambuTelemetry?.progressPercent || 0}%)
-                        </span>
+                        <div>
+                          <span className="job-status printing">
+                            <i /> Printing ({bambuTelemetry?.progressPercent || 0}%)
+                          </span>
+                          {bambuTelemetry?.remainingMinutes ? (
+                            <small style={{ display: "block", color: "#004f86", fontWeight: 700, fontSize: "11px", marginTop: "3px" }}>
+                              ~{formatRemainingTime(bambuTelemetry.remainingMinutes)} left
+                              {bambuTelemetry.totalLayers ? ` (L${bambuTelemetry.currentLayer}/${bambuTelemetry.totalLayers})` : ""}
+                            </small>
+                          ) : null}
+                        </div>
                       ) : j.status === "approved" ? (
                         <span className="job-status queued">
                           <i /> Next in Line (#{idx + 1})
@@ -1090,9 +1103,9 @@ export default function ServiceHub() {
               <span>ORDER / MODEL</span>
               <span>SUBMITTER</span>
               <span>SPECS</span>
+              <span>PRINT TIME</span>
               <span>DATE</span>
-              <span>STATUS</span>
-              <span style={{ textAlign: "right" }}>ACTION</span>
+              <span style={{ textAlign: "right" }}>STATUS</span>
             </div>
             {successful3DJobs.length > 0 ? (
               successful3DJobs.slice(0, 10).map((j) => (
@@ -1118,22 +1131,28 @@ export default function ServiceHub() {
                     <div style={{ fontSize: "11px", color: "var(--muted)" }}>{j.infill}% infill · {j.quality}</div>
                   </div>
                   <div>
-                    <span>{formatTime(j.createdAt)}</span>
+                    {(() => {
+                      const hrs = getActualHours(j);
+                      const isActual = j.status === "completed" && !!j.completedAt;
+                      if (hrs === null) return <span style={{ color: "var(--muted)", fontSize: "12px" }}>—</span>;
+                      return (
+                        <span style={{ fontWeight: 700, color: "var(--ink)" }}>
+                          {formatHours(hrs)}
+                          <small style={{ fontWeight: 400, color: isActual ? "#168557" : "var(--muted)", marginLeft: 4, fontSize: "10px" }}>
+                            {isActual ? "actual" : "est."}
+                          </small>
+                        </span>
+                      );
+                    })()}
                   </div>
                   <div>
+                    <span>{formatTime(j.createdAt)}</span>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
                     <span className={`job-status ${getStatusClass(j.status)}`}>
                       <i />
                       {getStatusLabel(j.status)}
                     </span>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <button
-                      type="button"
-                      className="btn-track-row"
-                      onClick={() => openTrackingForCode(j.trackingCode)}
-                    >
-                      Track 🔍
-                    </button>
                   </div>
                 </div>
               ))
@@ -1291,6 +1310,16 @@ export default function ServiceHub() {
                     </>
                   )}
                 </div>
+
+                {/* Interactive 3D Model Viewport on Bambu Lab P1S Bed */}
+                {file3D && (
+                  <ModelViewer3D
+                    file={file3D}
+                    filamentColor={filamentColor}
+                    dimensions={stlAnalysis?.dimensions}
+                    fitsBambuP1S={stlAnalysis?.fitsBambuP1S}
+                  />
+                )}
 
                 {/* Live Model Analysis Box (Dimensions, Volume, Weight, Duration, Cost) */}
                 {stlAnalysis && (
@@ -1630,20 +1659,56 @@ export default function ServiceHub() {
                   <div className="specs-box" style={{ marginTop: "16px" }}>
                     <div className="spec-item"><small>Model File</small><strong>{trackedJob.fileName}</strong></div>
                     <div className="spec-item"><small>Material</small><strong>{trackedJob.filamentType} ({trackedJob.color})</strong></div>
-                    <div className="spec-item"><small>Infill & Quality</small><strong>{trackedJob.infill}% · {trackedJob.quality}</strong></div>
+                    <div className="spec-item"><small>Infill &amp; Quality</small><strong>{trackedJob.infill}% · {trackedJob.quality}</strong></div>
                     <div className="spec-item"><small>Submitted At</small><strong>{formatTime(trackedJob.createdAt)}</strong></div>
-                    {trackedJob.estimatedPriceRp ? (
-                      <div className="spec-item" style={{ background: "#eefaf2", border: "1px solid #bce8cb" }}>
-                        <small style={{ color: "#168557", fontWeight: 700 }}>Est. Cost (Rp 4.000 / hr)</small>
-                        <strong style={{ color: "#168557" }}>Rp {trackedJob.estimatedPriceRp.toLocaleString("id-ID")} {trackedJob.estimatedHours ? `(~${trackedJob.estimatedHours}h)` : ""}</strong>
-                      </div>
-                    ) : null}
+                    {(() => {
+                      const hrs = getActualHours(trackedJob);
+                      const isActual = trackedJob.status === "completed" && !!trackedJob.completedAt;
+                      if (hrs === null) return null;
+                      return (
+                        <div className="spec-item" style={{ background: "#eef6ff", border: "1px solid #b9daff" }}>
+                          <small style={{ color: "#004f86", fontWeight: 700 }}>
+                            ⏱ {isActual ? "Actual" : "Est."} Print Duration
+                          </small>
+                          <strong style={{ color: "#004f86" }}>{formatHours(hrs)}</strong>
+                        </div>
+                      );
+                    })()}
+                    {(() => {
+                      const hrs = getActualHours(trackedJob);
+                      const isActual = trackedJob.status === "completed" && !!trackedJob.completedAt;
+                      if (hrs === null) return null;
+                      return (
+                        <div className="spec-item" style={{ background: "#eefaf2", border: "1px solid #bce8cb" }}>
+                          <small style={{ color: "#168557", fontWeight: 700 }}>
+                            {isActual ? "Total Cost (Rp 4.000 / hr)" : "Est. Cost (Rp 4.000 / hr)"}
+                          </small>
+                          <strong style={{ color: "#168557" }}>Rp {Math.round(hrs * 4000).toLocaleString("id-ID")}</strong>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {trackedJob.status === "completed" && (
                     <div style={{ marginTop: "16px", padding: "14px", background: "#eaf8f1", borderLeft: "4px solid #168557", color: "#168557" }}>
                       <strong>🎉 Your 3D print is completed and ready for pickup!</strong>
                       <p style={{ margin: "6px 0 0" }}>Please visit AI Center Universitas Brawijaya with your tracking code <b>{trackedJob.trackingCode}</b>.</p>
+                      {(() => {
+                        const hrs = getActualHours(trackedJob);
+                        if (hrs === null) return null;
+                        return (
+                          <div style={{ marginTop: "14px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                            <div style={{ background: "white", borderRadius: "8px", padding: "12px 14px", textAlign: "center", border: "1px solid #bce8cb" }}>
+                              <div style={{ fontSize: "11px", fontWeight: 700, color: "#168557", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Actual Print Time</div>
+                              <div style={{ fontSize: "22px", fontWeight: 900, color: "#004f86" }}>{formatHours(hrs)}</div>
+                            </div>
+                            <div style={{ background: "white", borderRadius: "8px", padding: "12px 14px", textAlign: "center", border: "1px solid #bce8cb" }}>
+                              <div style={{ fontSize: "11px", fontWeight: 700, color: "#168557", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "4px" }}>Total Cost</div>
+                              <div style={{ fontSize: "22px", fontWeight: 900, color: "#168557" }}>Rp {Math.round(hrs * 4000).toLocaleString("id-ID")}</div>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>

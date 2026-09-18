@@ -18,6 +18,7 @@
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@types/three": "^0.186.0",
     "drizzle-orm": "0.45.2",
     "express": "^5.2.1",
     "http-proxy-middleware": "^4.2.0",
@@ -25,7 +26,8 @@
     "multer": "^2.2.0",
     "pdf-to-printer": "^5.8.0",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "three": "^0.186.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
