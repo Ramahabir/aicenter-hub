@@ -88,27 +88,55 @@ async function findPrinter() {
   return { printers, selected: exact || epson || null };
 }
 
+let remoteAgentState = {
+  online: false,
+  printerName: null,
+  availablePrinters: 0,
+  paperSizes: [],
+  lastHeartbeat: 0,
+};
+
+function isRemoteAgentOnline() {
+  return Date.now() - remoteAgentState.lastHeartbeat < 30000;
+}
+
 function publicJob(job) {
   const { tempPath, ...safe } = job;
   return safe;
 }
 
 function queueJob(job, options) {
-  queue = queue.then(async () => {
-    job.status = "printing";
-    try {
-      const { selected } = await findPrinter();
-      if (!selected) throw new Error(`${CONFIGURED_PRINTER} was not found on this PC`);
-      await print(job.tempPath, { printer: selected.name, copies: options.copies, paperSize: options.paperSize, orientation: options.orientation, monochrome: options.monochrome, scale: "fit", silent: true });
-      job.status = "completed";
-      job.completedAt = new Date().toISOString();
-    } catch (error) {
+  if (process.platform === "win32") {
+    queue = queue.then(async () => {
+      job.status = "printing";
+      try {
+        const { selected } = await findPrinter();
+        if (!selected) {
+          if (isRemoteAgentOnline()) {
+            job.status = "queued";
+            return;
+          }
+          throw new Error(`${CONFIGURED_PRINTER} was not found on this PC`);
+        }
+        await print(job.tempPath, { printer: selected.name, copies: options.copies, paperSize: options.paperSize, orientation: options.orientation, monochrome: options.monochrome, scale: "fit", silent: true });
+        job.status = "completed";
+        job.completedAt = new Date().toISOString();
+        await fs.unlink(job.tempPath).catch(() => {});
+      } catch (error) {
+        job.status = "failed";
+        job.error = error instanceof Error ? error.message : "Printing failed";
+        await fs.unlink(job.tempPath).catch(() => {});
+      }
+    });
+  } else {
+    // Running on Linux (Hermes server):
+    // If the AIO agent is online, the job remains in "queued" status for the agent to pick up!
+    if (!isRemoteAgentOnline()) {
       job.status = "failed";
-      job.error = error instanceof Error ? error.message : "Printing failed";
-    } finally {
-      await fs.unlink(job.tempPath).catch(() => {});
+      job.error = "Epson L3110 print agent on AIO PC is currently offline";
+      fs.unlink(job.tempPath).catch(() => {});
     }
-  });
+  }
 }
 
 const app = express();
@@ -118,7 +146,7 @@ app.use((request, response, next) => {
   const requestHost = request.headers.host;
   if (origin && isAllowedOrigin(origin, requestHost)) response.setHeader("Access-Control-Allow-Origin", origin);
   response.setHeader("Vary", "Origin");
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Service-Pin");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Service-Pin, X-Agent-Secret");
   response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (request.method === "OPTIONS") return isAllowedOrigin(origin, requestHost) ? response.sendStatus(204) : response.sendStatus(403);
   if (!isAllowedOrigin(origin, requestHost)) return response.status(403).json({ error: "This origin is not allowed" });
@@ -138,8 +166,24 @@ app.get(["/favicon.svg", BASE_PATH + "/favicon.svg", "/favicon.ico", BASE_PATH +
 
 app.get(["/api/status", BASE_PATH + "/api/status"], async (_request, response) => {
   try {
-    const { printers, selected } = await findPrinter();
-    response.json({ online: Boolean(selected), printer: selected?.name || null, availablePrinters: printers.length, pinRequired: Boolean(SERVICE_PIN) });
+    let selected = null;
+    let printers = [];
+    if (process.platform === "win32") {
+      const res = await findPrinter();
+      printers = res.printers;
+      selected = res.selected;
+    }
+    if (!selected && isRemoteAgentOnline()) {
+      selected = { name: remoteAgentState.printerName || CONFIGURED_PRINTER };
+      printers = [{ name: remoteAgentState.printerName || CONFIGURED_PRINTER, paperSizes: remoteAgentState.paperSizes }];
+    }
+    response.json({
+      online: Boolean(selected),
+      printer: selected?.name || null,
+      availablePrinters: printers.length,
+      pinRequired: Boolean(SERVICE_PIN),
+      agentMode: isRemoteAgentOnline() ? "remote-aio" : "local",
+    });
   } catch (error) {
     response.status(503).json({ online: false, printer: null, availablePrinters: 0, message: error instanceof Error ? error.message : "Printer check failed" });
   }
@@ -189,6 +233,86 @@ app.post(["/api/admin/verify", BASE_PATH + "/api/admin/verify"], (request, respo
     return response.json({ ok: true, message: "Admin access granted" });
   }
   return response.status(401).json({ ok: false, error: "Incorrect admin password" });
+});
+
+// ==========================================
+// REMOTE AIO PRINT AGENT API (EPSON L3110)
+// ==========================================
+
+// Agent heartbeat
+app.post(["/api/agent/heartbeat", BASE_PATH + "/api/agent/heartbeat"], (request, response) => {
+  const { printerName, availablePrinters, paperSizes, secret } = request.body || {};
+  if (SERVICE_PIN && secret && secret !== SERVICE_PIN) {
+    return response.status(401).json({ error: "Invalid agent secret" });
+  }
+  remoteAgentState = {
+    online: true,
+    printerName: printerName || CONFIGURED_PRINTER,
+    availablePrinters: Number(availablePrinters) || 1,
+    paperSizes: paperSizes || ["A4", "Letter"],
+    lastHeartbeat: Date.now(),
+  };
+  response.json({ ok: true, serverTime: new Date().toISOString() });
+});
+
+// Agent poll for queued jobs
+app.get(["/api/agent/poll", BASE_PATH + "/api/agent/poll"], (request, response) => {
+  const secret = request.headers["x-agent-secret"] || request.query.secret;
+  if (SERVICE_PIN && secret && secret !== SERVICE_PIN) {
+    return response.status(401).json({ error: "Invalid agent secret" });
+  }
+  remoteAgentState.lastHeartbeat = Date.now();
+
+  const pending = Array.from(jobs.values())
+    .filter((j) => j.status === "queued")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  response.json({
+    jobs: pending.map((j) => ({
+      id: j.id,
+      fileName: j.fileName,
+      copies: j.copies,
+      paperSize: j.paperSize,
+      orientation: j.orientation,
+      monochrome: j.monochrome,
+      createdAt: j.createdAt,
+    })),
+  });
+});
+
+// Agent download file for a job
+app.get(["/api/agent/jobs/:id/file", BASE_PATH + "/api/agent/jobs/:id/file"], async (request, response) => {
+  const job = jobs.get(request.params.id);
+  if (!job || !job.tempPath) {
+    return response.status(404).json({ error: "Job or file not found" });
+  }
+  try {
+    await fs.access(job.tempPath);
+    response.download(job.tempPath, job.fileName);
+  } catch {
+    response.status(404).json({ error: "Print file missing on server" });
+  }
+});
+
+// Agent report job status
+app.post(["/api/agent/jobs/:id/status", BASE_PATH + "/api/agent/jobs/:id/status"], async (request, response) => {
+  const job = jobs.get(request.params.id);
+  if (!job) {
+    return response.status(404).json({ error: "Job not found" });
+  }
+  const { status, error } = request.body || {};
+  if (status) job.status = status;
+  if (error) job.error = error;
+  job.updatedAt = new Date().toISOString();
+
+  if (status === "completed") {
+    job.completedAt = new Date().toISOString();
+    if (job.tempPath) await fs.unlink(job.tempPath).catch(() => {});
+  } else if (status === "failed") {
+    if (job.tempPath) await fs.unlink(job.tempPath).catch(() => {});
+  }
+
+  response.json({ ok: true, job: publicJob(job) });
 });
 
 app.get(["/api/bambu/status", BASE_PATH + "/api/bambu/status"], (_request, response) => {

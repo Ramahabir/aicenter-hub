@@ -56,7 +56,10 @@ type Bambu3DJob = {
   estimatedPriceRp: number;
   status: "pending_review" | "approved" | "printing" | "completed" | "cancelled";
   createdAt: string;
+  startedAt?: string;
   completedAt?: string;
+  actualHours?: number;
+  bambuPrintTimeHours?: number;
 };
 
 const serviceBasePath = "/service-hub";
@@ -92,12 +95,18 @@ function getStatusLabel(status: string) {
   return status;
 }
 
-/** Returns actual elapsed hours for completed jobs (from timestamps),
- *  or estimatedHours for jobs still in queue/printing. */
-function getActualHours(job: { status: string; createdAt: string; completedAt?: string; estimatedHours?: number }): number | null {
-  if (job.status === "completed" && job.completedAt) {
-    const ms = new Date(job.completedAt).getTime() - new Date(job.createdAt).getTime();
-    return Math.round((ms / 1000 / 3600) * 10) / 10; // 1 decimal
+/** Returns actual print time fetched directly from Bambu printer telemetry,
+ *  or estimatedHours from slicing. Does not perform timestamp subtraction. */
+function getActualHours(job: {
+  actualHours?: number;
+  estimatedHours?: number;
+  bambuPrintTimeHours?: number;
+}): number | null {
+  if (typeof job.bambuPrintTimeHours === "number" && job.bambuPrintTimeHours > 0) {
+    return job.bambuPrintTimeHours;
+  }
+  if (typeof job.actualHours === "number" && job.actualHours > 0) {
+    return job.actualHours;
   }
   return job.estimatedHours ?? null;
 }
@@ -149,6 +158,43 @@ export default function ServiceHub() {
       return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
     });
   }, [jobs3D]);
+
+  // Active printing job from queue matching printer telemetry
+  const activePrintingJob = useMemo(() => {
+    if (!bambuTelemetry?.subtaskName) return null;
+    const subtask = bambuTelemetry.subtaskName.toLowerCase().trim();
+    return (
+      jobs3D.find((j) => {
+        const fn = j.fileName.toLowerCase().trim();
+        return fn === subtask || fn.includes(subtask) || subtask.includes(fn);
+      }) || null
+    );
+  }, [bambuTelemetry?.subtaskName, jobs3D]);
+
+  // Cumulative cost accrued so far during printing
+  const cumulativeCost = useMemo(() => {
+    const progress = Math.min(100, Math.max(0, bambuTelemetry?.progressPercent || 0));
+    const remMin = bambuTelemetry?.remainingMinutes || 0;
+
+    // 1. If we know the full price from the matched job
+    if (activePrintingJob?.estimatedPriceRp && activePrintingJob.estimatedPriceRp > 0) {
+      return Math.round((activePrintingJob.estimatedPriceRp * progress) / 100);
+    }
+
+    // 2. Otherwise calculate elapsed time from remaining time and progress
+    if (progress > 0 && remMin > 0 && progress < 100) {
+      const totalMin = remMin / (1 - progress / 100);
+      const elapsedMin = totalMin * (progress / 100);
+      return Math.round((elapsedMin / 60) * 4000);
+    }
+
+    if (progress >= 100) {
+      const hours = activePrintingJob?.actualHours || activePrintingJob?.estimatedHours || 1;
+      return Math.round(hours * 4000);
+    }
+
+    return 0;
+  }, [bambuTelemetry?.progressPercent, bambuTelemetry?.remainingMinutes, activePrintingJob]);
   
   // 3D Order Form State
   const [file3D, setFile3D] = useState<File | null>(null);
@@ -769,11 +815,18 @@ export default function ServiceHub() {
                   <div className="live-job-banner">
                     <span className="live-job-title">NOW PRINTING</span>
                     <strong className="live-job-name">{bambuTelemetry?.subtaskName || "Active 3D Print"}</strong>
-                    <div className="live-job-meta">
-                      <span>{bambuTelemetry?.progressPercent || 0}% Complete</span>
-                      {bambuTelemetry?.remainingMinutes ? (
-                        <span>• ~{formatRemainingTime(bambuTelemetry.remainingMinutes)} left</span>
-                      ) : null}
+                    <div className="live-job-meta" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <span>{bambuTelemetry?.progressPercent || 0}% Complete</span>
+                        {bambuTelemetry?.remainingMinutes ? (
+                          <span> • ~{formatRemainingTime(bambuTelemetry.remainingMinutes)} left</span>
+                        ) : null}
+                      </div>
+                      {cumulativeCost > 0 && (
+                        <span style={{ color: "#168557", fontWeight: 700, background: "#eaf8f1", padding: "1px 6px", borderRadius: "3px", fontSize: "10px" }}>
+                          Rp {cumulativeCost.toLocaleString("id-ID")}
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
@@ -857,11 +910,11 @@ export default function ServiceHub() {
                 ) : null}
               </div>
 
-              {bambuTelemetry?.remainingMinutes ? (
-                <div className="camera-time-remaining" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span>⏱ ~{formatRemainingTime(bambuTelemetry.remainingMinutes)} remaining</span>
-                  <span style={{ fontSize: "11px", color: "#168557", fontWeight: 700, background: "#eefaf2", padding: "2px 6px", borderRadius: "3px" }}>
-                    ~Rp {Math.round((bambuTelemetry.remainingMinutes / 60) * 4000).toLocaleString("id-ID")}
+              {bambuTelemetry?.remainingMinutes || cumulativeCost > 0 ? (
+                <div className="camera-time-remaining" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+                  <span>⏱ ~{formatRemainingTime(bambuTelemetry?.remainingMinutes || 0)} remaining</span>
+                  <span style={{ fontSize: "11px", color: "#168557", fontWeight: 700, background: "#eaf8f1", padding: "3px 8px", borderRadius: "3px" }}>
+                    Cumulative: Rp {cumulativeCost.toLocaleString("id-ID")}
                   </span>
                 </div>
               ) : (
@@ -2073,14 +2126,21 @@ export default function ServiceHub() {
                       style={{ width: `${bambuTelemetry?.progressPercent || 0}%` }}
                     />
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginTop: "10px", color: "var(--muted)", fontWeight: 700 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", marginTop: "10px", color: "var(--muted)", fontWeight: 700, alignItems: "center" }}>
                     <span>
                       Layer: {bambuTelemetry?.currentLayer || 0} / {bambuTelemetry?.totalLayers || 0}
                     </span>
-                    <span>
-                      {bambuTelemetry?.remainingMinutes
-                        ? `~${formatRemainingTime(bambuTelemetry.remainingMinutes)} remaining`
-                        : "Ready"}
+                    <span style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                      <span>
+                        {bambuTelemetry?.remainingMinutes
+                          ? `~${formatRemainingTime(bambuTelemetry.remainingMinutes)} remaining`
+                          : "Ready"}
+                      </span>
+                      {cumulativeCost > 0 && (
+                        <span style={{ color: "#168557", background: "#eaf8f1", padding: "2px 6px", borderRadius: "3px", fontSize: "11px" }}>
+                          Cumulative: Rp {cumulativeCost.toLocaleString("id-ID")}
+                        </span>
+                      )}
                     </span>
                   </div>
                 </div>

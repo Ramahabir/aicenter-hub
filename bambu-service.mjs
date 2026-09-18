@@ -348,7 +348,7 @@ export async function create3DJob(jobInput) {
  * 4. Resolving stale 'printing' jobs when printer is idle or moved on to another model
  */
 export async function syncPrinterStateWithQueue() {
-  const { gcodeState, subtaskName, progressPercent, remainingMinutes, activeTray } = printerTelemetry;
+  const { gcodeState, subtaskName, progressPercent, remainingMinutes, activeTray, currentLayer } = printerTelemetry;
   const isPrinting = gcodeState === "RUNNING" || gcodeState === "PAUSE";
   const isFinished = gcodeState === "FINISH";
 
@@ -370,28 +370,38 @@ export async function syncPrinterStateWithQueue() {
         );
       });
 
-      // Calculate realistic total hours from Bambu slicer:
-      let totalEstimatedHours = 0;
+      // Capture exact print time from Bambu P1S telemetry:
+      // When layer_num is 0 (or progressPercent <= 1), mc_remaining_time is EXACTLY the full sliced print time!
+      // If connected midway through a print, extrapolate total time using mc_remaining_time / (1 - progress/100).
+      let totalPrintMinutes = 0;
       if (remainingMinutes > 0) {
-        if (progressPercent > 0 && progressPercent < 100) {
-          const totalMinutes = Math.round(remainingMinutes / (1 - progressPercent / 100));
-          totalEstimatedHours = Math.round((totalMinutes / 60) * 10) / 10;
+        if (currentLayer === 0 || progressPercent <= 1) {
+          totalPrintMinutes = remainingMinutes;
+        } else if (progressPercent < 100) {
+          totalPrintMinutes = Math.round(remainingMinutes / (1 - progressPercent / 100));
         } else {
-          totalEstimatedHours = Math.round((remainingMinutes / 60) * 10) / 10;
+          totalPrintMinutes = remainingMinutes;
         }
       }
+      const totalEstimatedHours = totalPrintMinutes > 0 ? Number((totalPrintMinutes / 60).toFixed(2)) : 0;
 
       if (matched) {
         if (matched.status !== "printing") {
           matched.status = "printing";
+          matched.startedAt = new Date().toISOString();
           delete matched.completedAt;
           matched.updatedAt = new Date().toISOString();
           jobsChanged = true;
         }
-        if (totalEstimatedHours > 0 && (!matched.estimatedHours || Math.abs(matched.estimatedHours - totalEstimatedHours) > 0.5)) {
-          matched.estimatedHours = totalEstimatedHours;
-          matched.estimatedPriceRp = Math.round(totalEstimatedHours * 4000);
-          jobsChanged = true;
+        if (totalEstimatedHours > 0) {
+          // If at layer 0 (or first reading), lock in the exact G-code slice time from printer
+          if (currentLayer === 0 || progressPercent <= 1 || !matched.bambuPrintTimeHours) {
+            matched.bambuPrintTimeHours = totalEstimatedHours;
+            matched.actualHours = totalEstimatedHours;
+            matched.estimatedHours = totalEstimatedHours;
+            matched.estimatedPriceRp = Math.round(totalEstimatedHours * 4000);
+            jobsChanged = true;
+          }
         }
       } else {
         // Direct print from workshop friend!
@@ -425,8 +435,11 @@ export async function syncPrinterStateWithQueue() {
             volumeCm3: 0,
             estimatedWeightGrams: 0,
             estimatedHours: hours,
+            actualHours: hours,
+            bambuPrintTimeHours: hours,
             estimatedPriceRp: Math.round(hours * 4000),
             status: "printing",
+            startedAt: new Date().toISOString(),
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };
@@ -448,17 +461,18 @@ export async function syncPrinterStateWithQueue() {
           if (!matchesCurrent) {
             j.status = "completed";
             if (!j.completedAt) j.completedAt = new Date().toISOString();
+            j.actualHours = j.bambuPrintTimeHours || j.actualHours || j.estimatedHours || 1.0;
             j.updatedAt = new Date().toISOString();
             jobsChanged = true;
           }
         }
       }
     } else if (isFinished && cleanSubtask) {
-      const lowerSubtask = cleanSubtask.toLowerCase();
       for (const j of jobs) {
         if (j.status === "printing") {
           j.status = "completed";
           if (!j.completedAt) j.completedAt = new Date().toISOString();
+          j.actualHours = j.bambuPrintTimeHours || j.actualHours || j.estimatedHours || 1.0;
           j.updatedAt = new Date().toISOString();
           jobsChanged = true;
         }
@@ -470,6 +484,7 @@ export async function syncPrinterStateWithQueue() {
         if (j.status === "printing") {
           j.status = "completed";
           if (!j.completedAt) j.completedAt = new Date().toISOString();
+          j.actualHours = j.bambuPrintTimeHours || j.actualHours || j.estimatedHours || 1.0;
           j.updatedAt = new Date().toISOString();
           jobsChanged = true;
         }
@@ -506,8 +521,12 @@ export async function update3DJobStatus(id, newStatus, adminNote = "") {
   job.status = newStatus;
   job.updatedAt = new Date().toISOString();
   if (adminNote) job.adminNote = adminNote;
+  if (newStatus === "printing") {
+    if (!job.startedAt) job.startedAt = new Date().toISOString();
+  }
   if (newStatus === "completed") {
     job.completedAt = new Date().toISOString();
+    job.actualHours = job.bambuPrintTimeHours || job.actualHours || job.estimatedHours;
   }
 
   await saveJobs(jobs);

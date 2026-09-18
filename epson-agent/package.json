@@ -1,0 +1,13 @@
+{
+  "name": "ai-center-epson-agent",
+  "version": "1.0.0",
+  "description": "Lightweight print agent for Epson L3110 on Windows AIO PC",
+  "main": "epson-agent.mjs",
+  "type": "module",
+  "scripts": {
+    "start": "node epson-agent.mjs"
+  },
+  "dependencies": {
+    "pdf-to-printer": "^5.8.0"
+  }
+}

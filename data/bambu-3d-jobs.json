@@ -20,13 +20,16 @@
       "z": 207.9
     },
     "volumeCm3": 131.22,
-    "estimatedWeightGrams": 71.6,
-    "estimatedHours": 3.65,
-    "estimatedPriceRp": 14600,
+    "estimatedWeightGrams": 204.31,
+    "estimatedHours": 10.53,
+    "actualHours": 10.53,
+    "bambuPrintTimeHours": 10.53,
+    "estimatedPriceRp": 42000,
     "status": "completed",
     "createdAt": "2026-09-17T13:41:53.684Z",
-    "updatedAt": "2026-09-17T13:53:56.761Z",
-    "completedAt": "2026-09-17T13:53:56.761Z"
+    "startedAt": "2026-09-17T13:53:00.000Z",
+    "updatedAt": "2026-09-18T00:25:00.000Z",
+    "completedAt": "2026-09-18T00:25:00.000Z"
   },
   {
     "id": "35d389ca-1906-477e-88bf-a08797f8f585",
