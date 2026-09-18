@@ -1342,7 +1342,7 @@ export default function ServiceHub() {
                 <span>SPECS</span>
                 <span>PRINT TIME</span>
                 <span>DATE</span>
-                <span style={{ textAlign: "right" }}>STATUS / ACTION</span>
+                <span style={{ textAlign: "right" }}>STATUS</span>
               </div>
               {successful3DJobs.length > 0 ? (
                 successful3DJobs.slice(0, 10).map((j) => (
@@ -1390,20 +1390,11 @@ export default function ServiceHub() {
                   <div>
                     <span>{formatTime(j.createdAt)}</span>
                   </div>
-                  <div style={{ textAlign: "right", display: "flex", gap: "8px", justifyContent: "flex-end", alignItems: "center" }}>
+                  <div style={{ textAlign: "right" }}>
                     <span className={`job-status ${getStatusClass(j.status)}`}>
                       <i />
                       {getStatusLabel(j.status)}
                     </span>
-                    <button
-                      type="button"
-                      className="btn-track-row"
-                      style={{ padding: "4px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "3px" }}
-                      onClick={() => openTrackingForCode(j.trackingCode)}
-                      title="Lihat status dan unduh invoice resmi"
-                    >
-                      Track / Invoice 🔍
-                    </button>
                   </div>
                 </div>
               ))
