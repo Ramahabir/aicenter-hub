@@ -220,12 +220,32 @@ export function getBambuTelemetry() {
 }
 
 /**
+ * Generate official invoice number (e.g. INV/AIC/2026/09/B3D-9F2A)
+ */
+export function generateInvoiceNumber(trackingCode, date = new Date()) {
+  const d = date instanceof Date && !isNaN(date.getTime()) ? date : new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const code = (trackingCode || "").replace(/^B3D-/, "");
+  return `INV/AIC/${year}/${month}/B3D-${code}`;
+}
+
+/**
  * Load jobs from JSON database
  */
 async function loadJobs() {
   try {
     const data = await fs.readFile(JOBS_FILE, "utf-8");
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((j) => {
+      const createdAtDate = j.createdAt ? new Date(j.createdAt) : new Date();
+      return {
+        ...j,
+        invoiceNumber: j.invoiceNumber || generateInvoiceNumber(j.trackingCode, createdAtDate),
+        paymentStatus: j.paymentStatus || (j.customerName === "Workshop Direct" ? "waived" : "unpaid"),
+      };
+    });
   } catch {
     return [];
   }
@@ -330,6 +350,10 @@ export async function create3DJob(jobInput) {
     estimatedHours: jobInput.estimatedHours || 0,
     estimatedPriceRp: jobInput.estimatedPriceRp || 0,
     status: "pending_review", // pending_review, approved, printing, completed, cancelled
+    invoiceNumber: generateInvoiceNumber(trackingCode),
+    paymentStatus: "unpaid", // unpaid, paid, waived
+    paymentMethod: null,
+    paidAt: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -439,6 +463,10 @@ export async function syncPrinterStateWithQueue() {
             bambuPrintTimeHours: hours,
             estimatedPriceRp: Math.round(hours * 4000),
             status: "printing",
+            invoiceNumber: generateInvoiceNumber(trackingCode),
+            paymentStatus: "waived",
+            paymentMethod: "Internal AI Center Lab",
+            paidAt: new Date().toISOString(),
             startedAt: new Date().toISOString(),
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
@@ -503,12 +531,19 @@ export async function list3DJobs(filters = {}) {
   await syncPrinterStateWithQueue().catch(() => {});
   const jobs = await loadJobs();
   if (filters.trackingCode) {
+    const query = filters.trackingCode.toUpperCase().trim();
     return jobs.filter(
-      (j) => j.trackingCode.toUpperCase() === filters.trackingCode.toUpperCase()
+      (j) =>
+        j.trackingCode.toUpperCase() === query ||
+        (j.invoiceNumber && j.invoiceNumber.toUpperCase() === query) ||
+        j.id === filters.trackingCode
     );
   }
   if (filters.status) {
     return jobs.filter((j) => j.status === filters.status);
+  }
+  if (filters.paymentStatus) {
+    return jobs.filter((j) => j.paymentStatus === filters.paymentStatus);
   }
   return jobs;
 }
@@ -533,9 +568,41 @@ export async function update3DJobStatus(id, newStatus, adminNote = "") {
   return job;
 }
 
+export async function update3DJobPayment(id, { paymentStatus, paymentMethod, paidAt }) {
+  const jobs = await loadJobs();
+  const cleanId = String(id || "").toUpperCase().trim();
+  const job = jobs.find(
+    (j) =>
+      j.id === id ||
+      j.trackingCode.toUpperCase() === cleanId ||
+      (j.invoiceNumber && j.invoiceNumber.toUpperCase() === cleanId)
+  );
+  if (!job) throw new Error("Job not found");
+
+  if (paymentStatus) job.paymentStatus = paymentStatus;
+  if (paymentMethod !== undefined) job.paymentMethod = paymentMethod;
+  if (paidAt !== undefined) {
+    job.paidAt = paidAt;
+  } else if (paymentStatus === "paid" && !job.paidAt) {
+    job.paidAt = new Date().toISOString();
+  } else if (paymentStatus === "unpaid") {
+    job.paidAt = null;
+  }
+
+  job.updatedAt = new Date().toISOString();
+  await saveJobs(jobs);
+  return job;
+}
+
 export async function get3DJob(id) {
   const jobs = await loadJobs();
-  return jobs.find((j) => j.id === id || j.trackingCode === id);
+  const cleanId = String(id || "").toUpperCase().trim();
+  return jobs.find(
+    (j) =>
+      j.id === id ||
+      j.trackingCode.toUpperCase() === cleanId ||
+      (j.invoiceNumber && j.invoiceNumber.toUpperCase() === cleanId)
+  );
 }
 
 export async function launchBambuStudio(jobId) {

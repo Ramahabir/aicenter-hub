@@ -14,6 +14,7 @@ import {
   create3DJob,
   list3DJobs,
   update3DJobStatus,
+  update3DJobPayment,
   get3DJob,
   launchBambuStudio,
   UPLOAD_DIR,
@@ -428,6 +429,36 @@ app.post(
       response.json({ ...result, downloadUrl });
     } catch (err) {
       response.status(500).json({ error: err instanceof Error ? err.message : "Failed to prepare Bambu Studio file" });
+    }
+  }
+);
+
+app.get(
+  ["/api/bambu/jobs/:id", BASE_PATH + "/api/bambu/jobs/:id"],
+  async (request, response) => {
+    try {
+      const job = await get3DJob(request.params.id);
+      if (!job) return response.status(404).json({ error: "Job not found" });
+      response.json({ job });
+    } catch (err) {
+      response.status(500).json({ error: err instanceof Error ? err.message : "Failed to fetch job" });
+    }
+  }
+);
+
+app.patch(
+  ["/api/bambu/jobs/:id/payment", BASE_PATH + "/api/bambu/jobs/:id/payment"],
+  async (request, response) => {
+    if (SERVICE_PIN && request.headers["x-service-pin"] !== SERVICE_PIN) {
+      return response.status(401).json({ error: "Incorrect access PIN" });
+    }
+    try {
+      const { paymentStatus, paymentMethod, paidAt } = request.body || {};
+      if (!paymentStatus) return response.status(400).json({ error: "Missing paymentStatus" });
+      const job = await update3DJobPayment(request.params.id, { paymentStatus, paymentMethod, paidAt });
+      response.json({ job });
+    } catch (err) {
+      response.status(500).json({ error: err instanceof Error ? err.message : "Failed to update payment" });
     }
   }
 );

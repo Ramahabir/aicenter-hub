@@ -3,6 +3,7 @@
 import { ChangeEvent, DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { analyzeSTL, STLAnalysisResult } from "./lib/stl-analyzer";
 import ModelViewer3D from "./components/ModelViewer3D";
+import DigitalInvoiceModal from "./components/DigitalInvoiceModal";
 
 type HubStatus = { online: boolean; printer: string | null; availablePrinters: number; message?: string };
 type PrintJob = { id: string; fileName: string; status: "queued" | "printing" | "completed" | "failed"; createdAt: string; copies: number; error?: string };
@@ -38,6 +39,7 @@ type BambuTelemetry = {
 type Bambu3DJob = {
   id: string;
   trackingCode: string;
+  invoiceNumber?: string;
   fileName: string;
   fileSize: number;
   customerName: string;
@@ -55,6 +57,9 @@ type Bambu3DJob = {
   estimatedHours?: number;
   estimatedPriceRp: number;
   status: "pending_review" | "approved" | "printing" | "completed" | "cancelled";
+  paymentStatus?: "unpaid" | "paid" | "waived";
+  paymentMethod?: string | null;
+  paidAt?: string | null;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -142,10 +147,12 @@ export default function ServiceHub() {
   const [trackModalOpen, setTrackModalOpen] = useState(false);
   const [adminModalOpen, setAdminModalOpen] = useState(false);
   const [monitorModalOpen, setMonitorModalOpen] = useState(false);
+  const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
+  const [invoiceJob, setInvoiceJob] = useState<Bambu3DJob | null>(null);
   const [cameraKey, setCameraKey] = useState(0);
   const [bambuTelemetry, setBambuTelemetry] = useState<BambuTelemetry | null>(null);
   const [jobs3D, setJobs3D] = useState<Bambu3DJob[]>([]);
-  const [activityTab, setActivityTab] = useState<"queue" | "3d" | "2d">("queue");
+  const [activityTab, setActivityTab] = useState<"queue" | "3d" | "2d">("3d");
   const [activeHeroDevice, setActiveHeroDevice] = useState<"3d" | "2d">("3d");
   const successful3DJobs = useMemo(() => jobs3D.filter((j) => j.status === "completed"), [jobs3D]);
   const active3DQueue = useMemo(() => {
@@ -158,6 +165,13 @@ export default function ServiceHub() {
       return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
     });
   }, [jobs3D]);
+
+  // If there are active queue jobs, automatically switch to queue tab unless user chose otherwise
+  useEffect(() => {
+    if (active3DQueue.length > 0) {
+      setActivityTab("queue");
+    }
+  }, [active3DQueue.length]);
 
   // Active printing job from queue matching printer telemetry
   const activePrintingJob = useMemo(() => {
@@ -267,6 +281,19 @@ export default function ServiceHub() {
     }, 5000);
     return () => window.clearInterval(timer);
   }, [refresh, refresh3DJobs]);
+
+  // Check URL query parameters for direct invoice or tracking link
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const invParam = params.get("invoice") || params.get("inv");
+      const trackParam = params.get("track") || params.get("tracking");
+      const targetCode = invParam || trackParam;
+      if (targetCode) {
+        openInvoiceForCode(targetCode);
+      }
+    }
+  }, []);
 
   // Automatically sync filament selection with the printer's loaded spool
   useEffect(() => {
@@ -481,6 +508,33 @@ export default function ServiceHub() {
       setTrackError("Unable to query order status.");
     } finally {
       setSearchingTrack(false);
+    }
+  }
+
+  function openInvoice(job: Bambu3DJob) {
+    setInvoiceJob(job);
+    setInvoiceModalOpen(true);
+  }
+
+  async function openInvoiceForCode(code: string) {
+    if (!code) return;
+    try {
+      const res = await fetch(`${apiBase()}/bambu/jobs?trackingCode=${encodeURIComponent(code.trim())}`);
+      const data = await res.json();
+      if (data.jobs && data.jobs.length > 0) {
+        setInvoiceJob(data.jobs[0]);
+        setInvoiceModalOpen(true);
+      }
+    } catch (err) {
+      console.error("Failed to load invoice for code:", err);
+    }
+  }
+
+  function handleInvoicePaymentUpdated(updatedJob: Bambu3DJob) {
+    setInvoiceJob(updatedJob);
+    setJobs3D((prev) => prev.map((j) => (j.id === updatedJob.id ? updatedJob : j)));
+    if (trackedJob && trackedJob.id === updatedJob.id) {
+      setTrackedJob(updatedJob);
     }
   }
 
@@ -1137,16 +1191,39 @@ export default function ServiceHub() {
                 <div style={{ fontSize: "36px", marginBottom: "8px" }}>🧊</div>
                 <b>No prints in queue right now</b>
                 <span style={{ display: "block", margin: "6px 0 16px", color: "var(--muted)" }}>
-                  The 3D print queue is currently clear! Submit your 3D model to be #1 in line.
+                  {successful3DJobs.length > 0
+                    ? `Antrian cetak aktif saat ini kosong. Seluruh ${successful3DJobs.length} pesanan sebelumnya telah selesai dicetak.`
+                    : "The 3D print queue is currently clear! Submit your 3D model to be #1 in line."}
                 </span>
-                <button
-                  type="button"
-                  className="primary-button"
-                  style={{ display: "inline-flex", margin: "0 auto", padding: "8px 18px", fontSize: "13px" }}
-                  onClick={() => setBambuModalOpen(true)}
-                >
-                  Submit 3D Model Now →
-                </button>
+                <div style={{ display: "flex", gap: "10px", justifyContent: "center", flexWrap: "wrap" }}>
+                  {successful3DJobs.length > 0 && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      style={{
+                        padding: "8px 18px",
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        background: "#004f86",
+                        color: "white",
+                        borderRadius: "4px",
+                        border: "none",
+                        cursor: "pointer",
+                      }}
+                      onClick={() => setActivityTab("3d")}
+                    >
+                      Lihat {successful3DJobs.length} Riwayat Selesai ➔
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="primary-button"
+                    style={{ display: "inline-flex", padding: "8px 18px", fontSize: "13px" }}
+                    onClick={() => setBambuModalOpen(true)}
+                  >
+                    Submit 3D Model Now →
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1158,7 +1235,7 @@ export default function ServiceHub() {
               <span>SPECS</span>
               <span>PRINT TIME</span>
               <span>DATE</span>
-              <span style={{ textAlign: "right" }}>STATUS</span>
+              <span style={{ textAlign: "right" }}>STATUS / ACTION</span>
             </div>
             {successful3DJobs.length > 0 ? (
               successful3DJobs.slice(0, 10).map((j) => (
@@ -1201,11 +1278,20 @@ export default function ServiceHub() {
                   <div>
                     <span>{formatTime(j.createdAt)}</span>
                   </div>
-                  <div style={{ textAlign: "right" }}>
+                  <div style={{ textAlign: "right", display: "flex", gap: "8px", justifyContent: "flex-end", alignItems: "center" }}>
                     <span className={`job-status ${getStatusClass(j.status)}`}>
                       <i />
                       {getStatusLabel(j.status)}
                     </span>
+                    <button
+                      type="button"
+                      className="btn-track-row"
+                      style={{ padding: "4px 8px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "3px" }}
+                      onClick={() => openTrackingForCode(j.trackingCode)}
+                      title="Lihat status dan unduh invoice resmi"
+                    >
+                      Track / Invoice 🔍
+                    </button>
                   </div>
                 </div>
               ))
@@ -1303,7 +1389,7 @@ export default function ServiceHub() {
                 <div className="notice" style={{ background: "#eaf8f1", borderLeftColor: "#168557", color: "#168557" }}>
                   <strong>✓ Order successfully booked into the 3D queue!</strong>
                   <p style={{ margin: "8px 0" }}>
-                    Your 3D print request has been booked. You and your friends can track the live queue position at any time:
+                    Simpan Order ID Anda di bawah. Masukkan kode ini ke menu <b>Track 3D Order</b> untuk memantau status mesin dan mengunduh invoice resmi begitu pencetakan selesai:
                   </p>
                   <div style={{ fontSize: "28px", fontWeight: 900, letterSpacing: "0.08em", padding: "12px 18px", background: "white", display: "inline-block", border: "2px dashed #168557", margin: "10px 0" }}>
                     {submittedCode}
@@ -1314,14 +1400,14 @@ export default function ServiceHub() {
                       return (
                         <div style={{ marginTop: "10px", padding: "8px 12px", background: "rgba(22, 133, 87, 0.08)", borderRadius: "6px", display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: 600 }}>
                           <span style={{ padding: "3px 8px", background: "#168557", color: "white", borderRadius: "10px", fontSize: "12px", fontWeight: 800 }}>Queue #{pos}</span>
-                          <span>{pos === 1 ? "Your model is next in line to print!" : `${pos - 1} order${pos - 1 > 1 ? "s" : ""} currently ahead of yours in queue.`}</span>
+                          <span>{pos === 1 ? "Model Anda berada di antrian pertama!" : `${pos - 1} pesanan lain sedang antri di depan Anda.`}</span>
                         </div>
                       );
                     }
                     return null;
                   })()}
                 </div>
-                <div style={{ display: "flex", gap: "12px", marginTop: "24px" }}>
+                <div style={{ display: "flex", gap: "12px", marginTop: "24px", flexWrap: "wrap" }}>
                   <button
                     className="primary-button"
                     onClick={() => {
@@ -1332,7 +1418,7 @@ export default function ServiceHub() {
                       searchTracking();
                     }}
                   >
-                    Track this order 🔍
+                    Pantau di Track 3D Order 🔍
                   </button>
                   <button className="text-button" onClick={() => setSubmittedCode(null)}>
                     Submit another model
@@ -1764,6 +1850,81 @@ export default function ServiceHub() {
                       })()}
                     </div>
                   )}
+
+                  {trackedJob.status === "completed" ? (
+                    <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <button
+                        type="button"
+                        className="primary-button"
+                        style={{
+                          width: "100%",
+                          padding: "14px 22px",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "10px",
+                          fontSize: "15px",
+                          fontWeight: 800,
+                          background: "#168557",
+                          color: "white",
+                          border: "none",
+                          borderRadius: "8px",
+                          cursor: "pointer",
+                          boxShadow: "0 4px 14px rgba(22, 133, 87, 0.3)",
+                        }}
+                        onClick={() => openInvoice(trackedJob)}
+                      >
+                        📄 Unduh / Cetak Invoice Resmi (Pencetakan Sukses Selesai) ➔
+                      </button>
+                      <small style={{ textAlign: "center", color: "#64748b", fontSize: "11.5px" }}>
+                        Pencetakan telah berhasil diselesaikan pada printer Bambu Lab P1S. Invoice resmi &amp; kwitansi transaksi siap diunduh.
+                      </small>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        marginTop: "20px",
+                        padding: "14px 18px",
+                        borderRadius: "8px",
+                        background: "#f8fafc",
+                        border: "1.5px dashed #cbd5e1",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        flexWrap: "wrap",
+                        gap: "12px",
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: "240px" }}>
+                        <strong style={{ display: "block", color: "#334155", fontSize: "13px" }}>
+                          🔒 Invoice Digital Resmi Tersedia Setelah Cetak Selesai
+                        </strong>
+                        <span style={{ color: "#64748b", fontSize: "12px", display: "block", marginTop: "3px" }}>
+                          Pesanan sedang dalam tahap: <b style={{ textTransform: "capitalize", color: "#004f86" }}>{getStatusLabel(trackedJob.status)}</b>.
+                          Setelah proses cetak selesai dengan sukses, tombol unduh invoice resmi akan otomatis aktif di sini.
+                        </span>
+                      </div>
+                      {adminUnlocked && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          style={{
+                            fontSize: "11px",
+                            padding: "6px 12px",
+                            background: "#fffbeb",
+                            border: "1px solid #fde68a",
+                            color: "#92400e",
+                            borderRadius: "4px",
+                            fontWeight: 700,
+                          }}
+                          onClick={() => openInvoice(trackedJob)}
+                          title="Admin Preview Proforma Invoice"
+                        >
+                          👁️ Operator Preview
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1965,12 +2126,49 @@ export default function ServiceHub() {
                             <small style={{ color: "var(--muted)" }}>
                               {j.estimatedPriceRp ? `Rp ${j.estimatedPriceRp.toLocaleString("id-ID")}` : "-"}
                             </small>
+                            <br />
+                            {j.paymentStatus === "paid" ? (
+                              <span style={{ fontSize: "10px", padding: "1px 6px", borderRadius: "8px", background: "#dcfce7", color: "#166534", fontWeight: 800, display: "inline-block", marginTop: "3px" }}>
+                                ✓ LUNAS
+                              </span>
+                            ) : j.paymentStatus === "waived" ? (
+                              <span style={{ fontSize: "10px", padding: "1px 6px", borderRadius: "8px", background: "#e0f2fe", color: "#075985", fontWeight: 800, display: "inline-block", marginTop: "3px" }}>
+                                ⭐ HIBAH
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: "10px", padding: "1px 6px", borderRadius: "8px", background: "#fef3c7", color: "#92400e", fontWeight: 800, display: "inline-block", marginTop: "3px" }}>
+                                ⏳ UNPAID
+                              </span>
+                            )}
                           </td>
                           <td>
                             <span className={`badge-status ${j.status}`}>{j.status.replace("_", " ")}</span>
                           </td>
                           <td>
                             <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                              {/* View / Print Digital Invoice */}
+                              <button
+                                type="button"
+                                className="text-button"
+                                style={{
+                                  padding: "5px 8px",
+                                  fontSize: "11px",
+                                  background: "#fffbeb",
+                                  color: "#92400e",
+                                  borderRadius: "3px",
+                                  border: "1px solid #fde68a",
+                                  fontWeight: 700,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "3px",
+                                  cursor: "pointer",
+                                }}
+                                title="Lihat dan cetak invoice digital / kwitansi"
+                                onClick={() => openInvoice(j)}
+                              >
+                                📄 Invoice
+                              </button>
+
                               {/* 1-Click Launch Bambu Studio on PC */}
                               <button
                                 type="button"
@@ -2216,6 +2414,16 @@ export default function ServiceHub() {
           </section>
         </div>
       )}
+
+      {/* MODAL 5: Digital Invoice & Academic Reimbursement */}
+      <DigitalInvoiceModal
+        job={invoiceJob}
+        isOpen={invoiceModalOpen}
+        onClose={() => setInvoiceModalOpen(false)}
+        isAdmin={adminUnlocked}
+        adminPin={pin}
+        onPaymentUpdated={handleInvoicePaymentUpdated}
+      />
     </main>
   );
 }

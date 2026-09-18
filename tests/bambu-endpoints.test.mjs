@@ -35,10 +35,31 @@ test("Bambu job manager creates and lists jobs with unique tracking codes", asyn
   assert.ok(newJob.id);
   assert.match(newJob.trackingCode, /^B3D-[A-Z0-9]{4}$/);
   assert.equal(newJob.status, "pending_review");
+  assert.match(newJob.invoiceNumber, /^INV\/AIC\/\d{4}\/\d{2}\/B3D-[A-Z0-9]{4}$/);
+  assert.equal(newJob.paymentStatus, "unpaid");
 
   const queryResult = await list3DJobs({ trackingCode: newJob.trackingCode });
   assert.equal(queryResult.length, 1);
   assert.equal(queryResult[0].id, newJob.id);
+
+  // Test lookup by invoice number
+  const invoiceResult = await list3DJobs({ trackingCode: newJob.invoiceNumber });
+  assert.equal(invoiceResult.length, 1);
+  assert.equal(invoiceResult[0].id, newJob.id);
+
+  // Test updating payment
+  const { update3DJobPayment, get3DJob } = await import("../bambu-service.mjs");
+  const paidJob = await update3DJobPayment(newJob.id, {
+    paymentStatus: "paid",
+    paymentMethod: "QRIS",
+  });
+  assert.equal(paidJob.paymentStatus, "paid");
+  assert.equal(paidJob.paymentMethod, "QRIS");
+  assert.ok(paidJob.paidAt);
+
+  const foundJob = await get3DJob(newJob.invoiceNumber);
+  assert.ok(foundJob);
+  assert.equal(foundJob.paymentStatus, "paid");
 
   const fs = await import("node:fs/promises");
   await fs.writeFile("data/bambu-3d-jobs.json", JSON.stringify(initialJobs, null, 2), "utf-8");

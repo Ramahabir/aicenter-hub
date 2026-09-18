@@ -29,7 +29,9 @@
     "createdAt": "2026-09-17T13:41:53.684Z",
     "startedAt": "2026-09-17T13:53:00.000Z",
     "updatedAt": "2026-09-18T00:25:00.000Z",
-    "completedAt": "2026-09-18T00:25:00.000Z"
+    "completedAt": "2026-09-18T00:25:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-TPEL",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "35d389ca-1906-477e-88bf-a08797f8f585",
@@ -53,12 +55,16 @@
     },
     "volumeCm3": 28.4,
     "estimatedWeightGrams": 35,
-    "estimatedHours": 2.1,
-    "estimatedPriceRp": 8400,
-    "status": "completed",
+    "estimatedHours": 3.33,
+    "estimatedPriceRp": 13320,
+    "status": "printing",
     "createdAt": "2026-09-17T09:14:00.000Z",
-    "completedAt": "2026-09-17T11:20:00.000Z",
-    "updatedAt": "2026-09-17T11:20:00.000Z"
+    "updatedAt": "2026-09-18T06:35:34.481Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-7EB3",
+    "paymentStatus": "unpaid",
+    "startedAt": "2026-09-18T06:35:34.481Z",
+    "bambuPrintTimeHours": 3.33,
+    "actualHours": 3.33
   },
   {
     "id": "0d5dc31c-c50b-4841-910c-f7a23101a2e7",
@@ -87,7 +93,9 @@
     "status": "completed",
     "createdAt": "2026-09-17T05:06:00.000Z",
     "completedAt": "2026-09-17T08:30:00.000Z",
-    "updatedAt": "2026-09-17T08:30:00.000Z"
+    "updatedAt": "2026-09-17T08:30:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-VDTM",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "04bff012-8b35-45e6-a2cb-82f622ba7a77",
@@ -116,7 +124,9 @@
     "status": "completed",
     "createdAt": "2026-09-17T01:39:00.000Z",
     "completedAt": "2026-09-17T04:15:00.000Z",
-    "updatedAt": "2026-09-17T04:15:00.000Z"
+    "updatedAt": "2026-09-17T04:15:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-UHBN",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "a614ab7e-b406-4555-80e7-e8fa53d26e90",
@@ -145,7 +155,9 @@
     "status": "completed",
     "createdAt": "2026-09-16T22:22:00.000Z",
     "completedAt": "2026-09-17T00:10:00.000Z",
-    "updatedAt": "2026-09-17T00:10:00.000Z"
+    "updatedAt": "2026-09-17T00:10:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-ZE2C",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "18f9725f-2ff7-4c3e-8c50-ad6a3014c27a",
@@ -174,7 +186,9 @@
     "status": "completed",
     "createdAt": "2026-09-16T11:45:00.000Z",
     "completedAt": "2026-09-16T14:45:00.000Z",
-    "updatedAt": "2026-09-16T14:45:00.000Z"
+    "updatedAt": "2026-09-16T14:45:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-94WP",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "673f854b-d7dc-4375-9773-45543c72635a",
@@ -203,7 +217,9 @@
     "status": "completed",
     "createdAt": "2026-09-15T06:08:00.000Z",
     "completedAt": "2026-09-15T10:20:00.000Z",
-    "updatedAt": "2026-09-15T10:20:00.000Z"
+    "updatedAt": "2026-09-15T10:20:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-TUXA",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "b3e0203f-c576-4645-a745-f09dfa98c8c5",
@@ -232,7 +248,9 @@
     "status": "completed",
     "createdAt": "2026-09-14T12:00:00.000Z",
     "completedAt": "2026-09-14T13:30:00.000Z",
-    "updatedAt": "2026-09-14T13:30:00.000Z"
+    "updatedAt": "2026-09-14T13:30:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-H53Y",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "6d9e1346-6014-41d6-b183-b547f2258836",
@@ -261,7 +279,9 @@
     "status": "completed",
     "createdAt": "2026-09-13T05:34:00.000Z",
     "completedAt": "2026-09-13T08:40:00.000Z",
-    "updatedAt": "2026-09-13T08:40:00.000Z"
+    "updatedAt": "2026-09-13T08:40:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-EHR8",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "e9e9a4f4-5f56-4277-bf31-0dfdb6b42b6a",
@@ -290,7 +310,9 @@
     "status": "completed",
     "createdAt": "2026-09-12T06:40:00.000Z",
     "completedAt": "2026-09-12T11:10:00.000Z",
-    "updatedAt": "2026-09-12T11:10:00.000Z"
+    "updatedAt": "2026-09-12T11:10:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-S9P9",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "bfa86146-59c4-4a41-b844-325cfba07e86",
@@ -319,7 +341,9 @@
     "status": "completed",
     "createdAt": "2026-09-11T08:42:00.000Z",
     "completedAt": "2026-09-11T09:30:00.000Z",
-    "updatedAt": "2026-09-11T09:30:00.000Z"
+    "updatedAt": "2026-09-11T09:30:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-E5F6",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "bf58140d-d45c-4577-9a94-468bfb8d5a15",
@@ -348,7 +372,9 @@
     "status": "completed",
     "createdAt": "2026-09-11T00:27:00.000Z",
     "completedAt": "2026-09-11T03:15:00.000Z",
-    "updatedAt": "2026-09-11T03:15:00.000Z"
+    "updatedAt": "2026-09-11T03:15:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-7E82",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "52210a56-8a03-4f95-be75-274e1d1ebc34",
@@ -377,7 +403,9 @@
     "status": "completed",
     "createdAt": "2026-09-09T09:36:00.000Z",
     "completedAt": "2026-09-09T12:00:00.000Z",
-    "updatedAt": "2026-09-09T12:00:00.000Z"
+    "updatedAt": "2026-09-09T12:00:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-A62E",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "50e417a8-a3f2-45e6-9993-41bbd067c805",
@@ -406,7 +434,9 @@
     "status": "completed",
     "createdAt": "2026-09-09T06:16:00.000Z",
     "completedAt": "2026-09-09T07:40:00.000Z",
-    "updatedAt": "2026-09-09T07:40:00.000Z"
+    "updatedAt": "2026-09-09T07:40:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-Y9U7",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "2b9a7c31-7e88-4f11-9a12-881239aa8271",
@@ -435,7 +465,9 @@
     "status": "completed",
     "createdAt": "2026-09-08T07:42:00.000Z",
     "completedAt": "2026-09-08T13:30:00.000Z",
-    "updatedAt": "2026-09-08T13:30:00.000Z"
+    "updatedAt": "2026-09-08T13:30:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-K9N3",
+    "paymentStatus": "unpaid"
   },
   {
     "id": "7fa1249b-81dc-4a39-9c51-518293ae7918",
@@ -464,6 +496,8 @@
     "status": "completed",
     "createdAt": "2026-09-07T05:45:00.000Z",
     "completedAt": "2026-09-07T09:15:00.000Z",
-    "updatedAt": "2026-09-07T09:15:00.000Z"
+    "updatedAt": "2026-09-07T09:15:00.000Z",
+    "invoiceNumber": "INV/AIC/2026/09/B3D-F8S2",
+    "paymentStatus": "unpaid"
   }
 ]
