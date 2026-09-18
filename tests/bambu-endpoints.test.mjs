@@ -65,3 +65,12 @@ test("Bambu job manager creates and lists jobs with unique tracking codes", asyn
   await fs.writeFile("data/bambu-3d-jobs.json", JSON.stringify(initialJobs, null, 2), "utf-8");
 });
 
+test("Bambu service forceSyncBambu returns telemetry and jobs", async () => {
+  const { forceSyncBambu } = await import("../bambu-service.mjs");
+  const result = await forceSyncBambu();
+  assert.ok(result);
+  assert.ok("telemetry" in result);
+  assert.ok(Array.isArray(result.jobs));
+});
+
+

@@ -40,6 +40,8 @@ type Bambu3DJob = {
   id: string;
   trackingCode: string;
   invoiceNumber?: string;
+  bambuTaskId?: string;
+  source?: string;
   fileName: string;
   fileSize: number;
   customerName: string;
@@ -151,6 +153,7 @@ export default function ServiceHub() {
   const [invoiceJob, setInvoiceJob] = useState<Bambu3DJob | null>(null);
   const [cameraKey, setCameraKey] = useState(0);
   const [bambuTelemetry, setBambuTelemetry] = useState<BambuTelemetry | null>(null);
+  const [isSyncingBambu, setIsSyncingBambu] = useState(false);
   const [jobs3D, setJobs3D] = useState<Bambu3DJob[]>([]);
   const [activityTab, setActivityTab] = useState<"queue" | "3d" | "2d">("3d");
   const [activeHeroDevice, setActiveHeroDevice] = useState<"3d" | "2d">("3d");
@@ -535,6 +538,22 @@ export default function ServiceHub() {
     setJobs3D((prev) => prev.map((j) => (j.id === updatedJob.id ? updatedJob : j)));
     if (trackedJob && trackedJob.id === updatedJob.id) {
       setTrackedJob(updatedJob);
+    }
+  }
+
+  async function handleSyncBambu() {
+    setIsSyncingBambu(true);
+    try {
+      const res = await fetch(`${apiBase()}/bambu/sync`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.telemetry) setBambuTelemetry(data.telemetry);
+        if (Array.isArray(data.jobs)) setJobs3D(data.jobs);
+      }
+    } catch (err) {
+      console.error("Failed to sync with Bambu printer:", err);
+    } finally {
+      setIsSyncingBambu(false);
     }
   }
 
@@ -1085,6 +1104,23 @@ export default function ServiceHub() {
               </button>
             </div>
             <button
+              type="button"
+              className="text-button"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "5px",
+                background: isSyncingBambu ? "#e2e8f0" : "transparent",
+                color: "#004f86",
+                fontWeight: 700,
+              }}
+              disabled={isSyncingBambu}
+              onClick={handleSyncBambu}
+              title="Tarik & sinkronkan data langsung dari printer Bambu Lab P1S via LAN API"
+            >
+              {isSyncingBambu ? "⏳ Syncing Bambu…" : "🔄 Sync Bambu Printer"}
+            </button>
+            <button
               className="text-button"
               onClick={() => {
                 refresh();
@@ -1132,6 +1168,11 @@ export default function ServiceHub() {
                         </span>
                         <span className="code-pill">{j.trackingCode}</span>
                         <strong style={{ color: "var(--ink)", wordBreak: "break-all" }}>{j.fileName}</strong>
+                        {(j.source === "bambu_direct" || j.customerName?.includes("Workshop Direct")) && (
+                          <span style={{ background: "#e0f2fe", color: "#0369a1", fontSize: "10px", fontWeight: 700, padding: "2px 6px", borderRadius: "3px", flexShrink: 0 }}>
+                            📡 Bambu Direct
+                          </span>
+                        )}
                       </div>
                       <small style={{ color: "var(--muted)", fontSize: "11px", marginLeft: "32px" }}>
                         {j.volumeCm3 ? `${j.volumeCm3.toFixed(1)} cm³ · ` : ""}
@@ -1228,23 +1269,94 @@ export default function ServiceHub() {
             )}
           </div>
         ) : activityTab === "3d" ? (
-          <div className="activity-table">
-            <div className="activity-3d-head">
-              <span>ORDER / MODEL</span>
-              <span>SUBMITTER</span>
-              <span>SPECS</span>
-              <span>PRINT TIME</span>
-              <span>DATE</span>
-              <span style={{ textAlign: "right" }}>STATUS / ACTION</span>
-            </div>
-            {successful3DJobs.length > 0 ? (
-              successful3DJobs.slice(0, 10).map((j) => (
-                <div className="activity-3d-row" key={j.id}>
+          <div>
+            {/* Live Active Direct Print Alert if printer is currently printing */}
+            {bambuTelemetry && (bambuTelemetry.gcodeState === "RUNNING" || bambuTelemetry.gcodeState === "PAUSE") && (
+              <div
+                style={{
+                  marginBottom: "16px",
+                  padding: "14px 18px",
+                  background: "linear-gradient(135deg, rgba(0, 79, 134, 0.06) 0%, rgba(22, 133, 87, 0.09) 100%)",
+                  border: "1.5px solid rgba(0, 79, 134, 0.25)",
+                  borderRadius: "8px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: "12px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      background: "#168557",
+                      color: "white",
+                      fontWeight: 800,
+                      fontSize: "11px",
+                      padding: "4px 9px",
+                      borderRadius: "12px",
+                      letterSpacing: "0.5px",
+                    }}
+                  >
+                    <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#fff", display: "inline-block" }} />
+                    SEDANG MENCETAK
+                  </span>
                   <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-                      <span className="code-pill">{j.trackingCode}</span>
-                      <strong style={{ color: "var(--ink)", wordBreak: "break-all" }}>{j.fileName}</strong>
-                    </div>
+                    <strong style={{ color: "#004f86", fontSize: "14px" }}>
+                      {bambuTelemetry.subtaskName || "Pencetakan Langsung (Direct Print)"}
+                    </strong>
+                    <span style={{ color: "#475569", fontSize: "12px", marginLeft: "10px" }}>
+                      Filamen: <b>{bambuTelemetry.activeTray?.type || "Standard"} ({bambuTelemetry.activeTray?.colorName || "White"})</b> · Progress: <b>{bambuTelemetry.progressPercent}%</b>
+                      {bambuTelemetry.remainingMinutes ? ` · ~${formatRemainingTime(bambuTelemetry.remainingMinutes)} tersisa` : ""}
+                      {bambuTelemetry.totalLayers ? ` (Layer ${bambuTelemetry.currentLayer}/${bambuTelemetry.totalLayers})` : ""}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  style={{
+                    padding: "6px 14px",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    background: "#004f86",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setActivityTab("queue")}
+                >
+                  Lihat di Antrean Aktif ➔
+                </button>
+              </div>
+            )}
+
+            <div className="activity-table">
+              <div className="activity-3d-head">
+                <span>ORDER / MODEL</span>
+                <span>SUBMITTER</span>
+                <span>SPECS</span>
+                <span>PRINT TIME</span>
+                <span>DATE</span>
+                <span style={{ textAlign: "right" }}>STATUS / ACTION</span>
+              </div>
+              {successful3DJobs.length > 0 ? (
+                successful3DJobs.slice(0, 10).map((j) => (
+                  <div className="activity-3d-row" key={j.id}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                        <span className="code-pill">{j.trackingCode}</span>
+                        <strong style={{ color: "var(--ink)", wordBreak: "break-all" }}>{j.fileName}</strong>
+                        {(j.source === "bambu_direct" || j.customerName?.includes("Workshop Direct")) && (
+                          <span style={{ background: "#e0f2fe", color: "#0369a1", fontSize: "10px", fontWeight: 700, padding: "2px 6px", borderRadius: "3px", flexShrink: 0 }}>
+                            📡 Bambu Direct
+                          </span>
+                        )}
+                      </div>
                     <small style={{ color: "var(--muted)", fontSize: "11px" }}>
                       {j.volumeCm3 ? `${j.volumeCm3.toFixed(1)} cm³ · ` : ""}
                       {j.estimatedWeightGrams ? `~${j.estimatedWeightGrams.toFixed(0)}g · ` : ""}
@@ -1302,6 +1414,7 @@ export default function ServiceHub() {
               </div>
             )}
           </div>
+        </div>
         ) : (
           <div className="activity-table">
             <div className="activity-head"><span>DOCUMENT</span><span>SUBMITTED</span><span>COPIES</span><span>STATUS</span></div>

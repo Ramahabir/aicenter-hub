@@ -17,6 +17,7 @@ import {
   update3DJobPayment,
   get3DJob,
   launchBambuStudio,
+  forceSyncBambu,
   UPLOAD_DIR,
 } from "./bambu-service.mjs";
 import {
@@ -318,6 +319,15 @@ app.post(["/api/agent/jobs/:id/status", BASE_PATH + "/api/agent/jobs/:id/status"
 
 app.get(["/api/bambu/status", BASE_PATH + "/api/bambu/status"], (_request, response) => {
   response.json({ telemetry: getBambuTelemetry() });
+});
+
+app.all(["/api/bambu/sync", BASE_PATH + "/api/bambu/sync"], async (_request, response) => {
+  try {
+    const result = await forceSyncBambu();
+    response.json(result);
+  } catch (err) {
+    response.status(500).json({ error: err instanceof Error ? err.message : "Failed to sync with Bambu printer" });
+  }
 });
 
 app.get(["/api/bambu/camera.mjpeg", BASE_PATH + "/api/bambu/camera.mjpeg"], (request, response) => {

@@ -33,6 +33,10 @@ let printerTelemetry = {
   bedTemp: 0,
   bedTargetTemp: 0,
   subtaskName: "",
+  gcodeFile: "",
+  taskId: "",
+  subtaskId: "",
+  printType: "",
   amsTrays: [],
   activeTray: null,
   lastUpdated: null,
@@ -137,6 +141,18 @@ export async function initBambuMqtt() {
         }
         if (printData.subtask_name) {
           printerTelemetry.subtaskName = printData.subtask_name;
+        }
+        if (printData.gcode_file) {
+          printerTelemetry.gcodeFile = printData.gcode_file;
+        }
+        if (printData.task_id) {
+          printerTelemetry.taskId = String(printData.task_id);
+        }
+        if (printData.subtask_id) {
+          printerTelemetry.subtaskId = String(printData.subtask_id);
+        }
+        if (printData.print_type) {
+          printerTelemetry.printType = printData.print_type;
         }
 
         // Parse AMS and Spool Holder (vt_tray) filament information
@@ -366,55 +382,72 @@ export async function create3DJob(jobInput) {
 /**
  * Automatically sync printer state with the 3D job queue.
  * Handles:
- * 1. Workshop direct prints (creates and puts them at top of queue with status 'printing')
+ * 1. Workshop direct prints (creates and puts them at top of queue with status 'printing' and unique bambuTaskId)
  * 2. Pre-submitted queue jobs that started printing (updates their status to 'printing' and syncs Bambu duration)
- * 3. Print completion (moves them from queue to 'completed' with completedAt)
+ * 3. Print completion (moves them from queue to 'completed' with completedAt and exact telemetry duration)
  * 4. Resolving stale 'printing' jobs when printer is idle or moved on to another model
+ * 5. Auto-logging completed direct prints even if started while the service was offline
  */
 export async function syncPrinterStateWithQueue() {
-  const { gcodeState, subtaskName, progressPercent, remainingMinutes, activeTray, currentLayer } = printerTelemetry;
+  const { gcodeState, subtaskName, gcodeFile, taskId, progressPercent, remainingMinutes, activeTray, currentLayer } = printerTelemetry;
   const isPrinting = gcodeState === "RUNNING" || gcodeState === "PAUSE";
   const isFinished = gcodeState === "FINISH";
+  const isIdle = gcodeState === "IDLE";
 
   try {
     const jobs = await loadJobs();
     let jobsChanged = false;
-    const cleanSubtask = (subtaskName || "").trim();
+    const cleanSubtask = (subtaskName || gcodeFile || "").trim();
+
+    // Calculate exact or extrapolated duration from Bambu P1S telemetry
+    let totalPrintMinutes = 0;
+    if (remainingMinutes > 0) {
+      if (currentLayer === 0 || progressPercent <= 1) {
+        totalPrintMinutes = remainingMinutes;
+      } else if (progressPercent < 100) {
+        totalPrintMinutes = Math.round(remainingMinutes / (1 - progressPercent / 100));
+      } else {
+        totalPrintMinutes = remainingMinutes;
+      }
+    }
+    const totalEstimatedHours = totalPrintMinutes > 0 ? Number((totalPrintMinutes / 60).toFixed(2)) : 0;
 
     if (isPrinting && cleanSubtask) {
       const lowerSubtask = cleanSubtask.toLowerCase();
 
-      // Find matching job by file name
-      let matched = jobs.find((j) => {
-        const lowerFile = j.fileName.toLowerCase();
-        return (
-          lowerFile === lowerSubtask ||
-          lowerFile.includes(lowerSubtask) ||
-          lowerSubtask.includes(lowerFile)
-        );
-      });
-
-      // Capture exact print time from Bambu P1S telemetry:
-      // When layer_num is 0 (or progressPercent <= 1), mc_remaining_time is EXACTLY the full sliced print time!
-      // If connected midway through a print, extrapolate total time using mc_remaining_time / (1 - progress/100).
-      let totalPrintMinutes = 0;
-      if (remainingMinutes > 0) {
-        if (currentLayer === 0 || progressPercent <= 1) {
-          totalPrintMinutes = remainingMinutes;
-        } else if (progressPercent < 100) {
-          totalPrintMinutes = Math.round(remainingMinutes / (1 - progressPercent / 100));
-        } else {
-          totalPrintMinutes = remainingMinutes;
-        }
+      // Matching priority:
+      // 1. By Bambu taskId if previously recorded
+      // 2. Currently 'printing' job with matching file name
+      // 3. 'approved' or 'pending_review' job with matching file name
+      let matched = null;
+      if (taskId) {
+        matched = jobs.find((j) => j.bambuTaskId && j.bambuTaskId === taskId);
       }
-      const totalEstimatedHours = totalPrintMinutes > 0 ? Number((totalPrintMinutes / 60).toFixed(2)) : 0;
+      if (!matched) {
+        matched = jobs.find((j) => {
+          if (j.status !== "printing") return false;
+          const lowerFile = j.fileName.toLowerCase();
+          return lowerFile === lowerSubtask || lowerFile.includes(lowerSubtask) || lowerSubtask.includes(lowerFile);
+        });
+      }
+      if (!matched) {
+        matched = jobs.find((j) => {
+          if (!["approved", "pending_review"].includes(j.status)) return false;
+          const lowerFile = j.fileName.toLowerCase();
+          return lowerFile === lowerSubtask || lowerFile.includes(lowerSubtask) || lowerSubtask.includes(lowerFile);
+        });
+      }
 
       if (matched) {
         if (matched.status !== "printing") {
           matched.status = "printing";
-          matched.startedAt = new Date().toISOString();
+          matched.startedAt = matched.startedAt || new Date().toISOString();
           delete matched.completedAt;
           matched.updatedAt = new Date().toISOString();
+          jobsChanged = true;
+        }
+        if (taskId && matched.bambuTaskId !== taskId) {
+          matched.bambuTaskId = taskId;
           jobsChanged = true;
         }
         if (totalEstimatedHours > 0) {
@@ -429,27 +462,33 @@ export async function syncPrinterStateWithQueue() {
         }
       } else {
         // Direct print from workshop friend!
-        const existingDirect = jobs.find(
-          (j) =>
-            j.status === "printing" &&
-            (j.fileName.toLowerCase().includes(lowerSubtask) || lowerSubtask.includes(j.fileName.toLowerCase()))
-        );
+        const existingDirect = jobs.find((j) => {
+          if (taskId && j.bambuTaskId === taskId) return true;
+          if (j.status === "printing") {
+            const lowerFile = j.fileName.toLowerCase();
+            return lowerFile === lowerSubtask || lowerFile.includes(lowerSubtask) || lowerSubtask.includes(lowerFile);
+          }
+          return false;
+        });
 
         if (!existingDirect) {
           const filamentType = activeTray?.type || "PLA";
           const filamentColor = activeTray?.colorName || "White";
           const hours = totalEstimatedHours > 0 ? totalEstimatedHours : 2.5;
+          const trackingCode = generateTrackingCode();
 
           const directJob = {
             id: crypto.randomUUID(),
-            trackingCode: generateTrackingCode(),
+            trackingCode,
+            bambuTaskId: taskId || undefined,
             fileName: cleanSubtask.endsWith(".3mf") || cleanSubtask.endsWith(".stl") ? cleanSubtask : `${cleanSubtask}.3mf`,
             fileSize: 0,
             filePath: "",
-            customerName: "Workshop Direct",
+            customerName: "Workshop Direct (Bambu Studio)",
             customerPhone: "",
             customerDept: "AI Center Workshop",
-            customerNotes: "Direct print from Bambu Studio / LAN",
+            customerNotes: `Direct print via Bambu Lab P1S (${printerTelemetry.printType || "LAN"})`,
+            source: "bambu_direct",
             filamentType,
             color: filamentColor,
             infill: 20,
@@ -474,19 +513,17 @@ export async function syncPrinterStateWithQueue() {
 
           jobs.unshift(directJob);
           jobsChanged = true;
-          console.log(`[Bambu Service] Auto-synced direct workshop print into queue: ${directJob.fileName} (${directJob.trackingCode})`);
+          console.log(`[Bambu Service] Auto-synced direct workshop print into queue: ${directJob.fileName} (${directJob.trackingCode}, Task ID: ${taskId || "N/A"})`);
         }
       }
 
-      // Ensure any other job previously marked 'printing' is marked completed if it's not this subtask
+      // Complete any other job previously marked 'printing' if it's not this active print
       for (const j of jobs) {
         if (j.status === "printing") {
-          const lowerFile = j.fileName.toLowerCase();
-          const matchesCurrent =
-            lowerFile === lowerSubtask ||
-            lowerFile.includes(lowerSubtask) ||
-            lowerSubtask.includes(lowerFile);
-          if (!matchesCurrent) {
+          const isThisJob =
+            (taskId && j.bambuTaskId === taskId) ||
+            (j.fileName.toLowerCase().includes(lowerSubtask) || lowerSubtask.includes(j.fileName.toLowerCase()));
+          if (!isThisJob) {
             j.status = "completed";
             if (!j.completedAt) j.completedAt = new Date().toISOString();
             j.actualHours = j.bambuPrintTimeHours || j.actualHours || j.estimatedHours || 1.0;
@@ -495,26 +532,72 @@ export async function syncPrinterStateWithQueue() {
           }
         }
       }
-    } else if (isFinished && cleanSubtask) {
+    } else if (isFinished || isIdle) {
+      // If printer is finished or idle, any leftover 'printing' jobs should be completed
       for (const j of jobs) {
         if (j.status === "printing") {
           j.status = "completed";
           if (!j.completedAt) j.completedAt = new Date().toISOString();
-          j.actualHours = j.bambuPrintTimeHours || j.actualHours || j.estimatedHours || 1.0;
+          j.actualHours = j.bambuPrintTimeHours || totalEstimatedHours || j.actualHours || j.estimatedHours || 1.0;
           j.updatedAt = new Date().toISOString();
           jobsChanged = true;
         }
       }
-      await recordFinishedPrint(cleanSubtask);
-    } else if (gcodeState === "IDLE") {
-      // If printer is idle, any leftover 'printing' jobs should be completed
-      for (const j of jobs) {
-        if (j.status === "printing") {
-          j.status = "completed";
-          if (!j.completedAt) j.completedAt = new Date().toISOString();
-          j.actualHours = j.bambuPrintTimeHours || j.actualHours || j.estimatedHours || 1.0;
-          j.updatedAt = new Date().toISOString();
+
+      // If printer is idle or finished, but reports a subtaskName and taskId that was never logged:
+      // Auto-record it as completed direct print so it is NOT missed in printing history!
+      if (cleanSubtask && taskId) {
+        const lowerSubtask = cleanSubtask.toLowerCase();
+        const alreadyLogged = jobs.some((j) => {
+          if (j.bambuTaskId && j.bambuTaskId === taskId) return true;
+          const lowerFile = j.fileName.toLowerCase();
+          return lowerFile === lowerSubtask || lowerFile.includes(lowerSubtask) || lowerSubtask.includes(lowerFile);
+        });
+
+        if (!alreadyLogged) {
+          const filamentType = activeTray?.type || "PLA";
+          const filamentColor = activeTray?.colorName || "White";
+          const hours = totalEstimatedHours > 0 ? totalEstimatedHours : 2.0;
+          const trackingCode = generateTrackingCode();
+
+          const finishedDirectJob = {
+            id: crypto.randomUUID(),
+            trackingCode,
+            bambuTaskId: taskId,
+            fileName: cleanSubtask.endsWith(".3mf") || cleanSubtask.endsWith(".stl") ? cleanSubtask : `${cleanSubtask}.3mf`,
+            fileSize: 0,
+            filePath: "",
+            customerName: "Workshop Direct (Bambu Studio)",
+            customerPhone: "",
+            customerDept: "AI Center Workshop",
+            customerNotes: `Direct print via Bambu Lab P1S (${printerTelemetry.printType || "LAN"})`,
+            source: "bambu_direct",
+            filamentType,
+            color: filamentColor,
+            infill: 20,
+            quality: "0.20mm Standard",
+            supports: "auto",
+            dimensions: { x: 0, y: 0, z: 0 },
+            volumeCm3: 0,
+            estimatedWeightGrams: 0,
+            estimatedHours: hours,
+            actualHours: hours,
+            bambuPrintTimeHours: hours,
+            estimatedPriceRp: Math.round(hours * 4000),
+            status: "completed",
+            invoiceNumber: generateInvoiceNumber(trackingCode),
+            paymentStatus: "waived",
+            paymentMethod: "Internal AI Center Lab",
+            paidAt: new Date().toISOString(),
+            startedAt: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          jobs.unshift(finishedDirectJob);
           jobsChanged = true;
+          console.log(`[Bambu Service] Auto-recorded finished direct workshop print: ${finishedDirectJob.fileName} (${finishedDirectJob.trackingCode})`);
         }
       }
     }
@@ -525,6 +608,26 @@ export async function syncPrinterStateWithQueue() {
   } catch (err) {
     console.warn("[Bambu Service] Error syncing printer state with queue:", err.message);
   }
+}
+
+/**
+ * Force an immediate telemetry sync with the Bambu P1S printer via MQTT pushall
+ */
+export async function forceSyncBambu() {
+  if (mqttClient && printerTelemetry.connected && BAMBU_SERIAL) {
+    mqttClient.publish(
+      `device/${BAMBU_SERIAL}/request`,
+      JSON.stringify({ pushing: { sequence_id: String(Date.now()), command: "pushall" } })
+    );
+    // Wait briefly for incoming MQTT report
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  }
+  await syncPrinterStateWithQueue();
+  const jobs = await loadJobs();
+  return {
+    telemetry: getBambuTelemetry(),
+    jobs,
+  };
 }
 
 export async function list3DJobs(filters = {}) {
