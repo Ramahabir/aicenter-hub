@@ -2,10 +2,11 @@ import tls from "node:tls";
 import { EventEmitter } from "node:events";
 
 const emitter = new EventEmitter();
-emitter.setMaxListeners(50);
+emitter.setMaxListeners(100);
 
 let cameraSocket = null;
 let reconnectTimer = null;
+let watchdogTimer = null;
 let latestFrame = null;
 let lastFrameTimestamp = 0;
 let isConnected = false;
@@ -20,9 +21,52 @@ export function initBambuCamera(opts = {}) {
   if (opts.port) config.port = Number(opts.port);
   if (opts.accessCode) config.accessCode = opts.accessCode;
 
+  startWatchdog();
+
   if (config.accessCode && config.host) {
     connectCamera();
   }
+}
+
+function startWatchdog() {
+  if (watchdogTimer) return;
+  watchdogTimer = setInterval(() => {
+    // If configured and marked connected but haven't received a frame in >12 seconds, reset connection
+    if (config.host && config.accessCode) {
+      const now = Date.now();
+      const stalled = isConnected && lastFrameTimestamp > 0 && now - lastFrameTimestamp > 12000;
+      const neverStarted = isConnected && lastFrameTimestamp === 0 && cameraSocket;
+
+      if (stalled || neverStarted) {
+        console.warn(`[Bambu Camera Watchdog] Stream stalled (no frames for ${Math.round((now - lastFrameTimestamp) / 1000)}s). Forcing reconnect...`);
+        disconnectCamera();
+        connectCamera();
+      } else if (!cameraSocket && !reconnectTimer) {
+        connectCamera();
+      }
+    }
+  }, 5000);
+}
+
+export function disconnectCamera() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (cameraSocket) {
+    try {
+      cameraSocket.removeAllListeners();
+      cameraSocket.destroy();
+    } catch {}
+    cameraSocket = null;
+  }
+  isConnected = false;
+}
+
+export function forceReconnectCamera() {
+  console.log("[Bambu Camera] Manual reconnect requested...");
+  disconnectCamera();
+  connectCamera();
 }
 
 function connectCamera() {
@@ -41,6 +85,9 @@ function connectCamera() {
     const socket = tls.connect({ host, port, rejectUnauthorized: false }, () => {
       console.log(`[Bambu Camera] TLS connection established with ${host}:${port}. Sending auth handshake...`);
       isConnected = true;
+
+      socket.setKeepAlive(true, 3000);
+      socket.setTimeout(12000);
 
       const authBuf = Buffer.alloc(80);
       authBuf.writeUInt32LE(0x40, 0);
@@ -80,31 +127,55 @@ function connectCamera() {
           latestFrame = frame;
           lastFrameTimestamp = Date.now();
           emitter.emit("frame", frame);
+        } else {
+          // If frame doesn't start with SOI, find next SOI to resync
+          const nextSOI = buffer.indexOf(Buffer.from([0xff, 0xd8]));
+          if (nextSOI > 0) {
+            buffer = buffer.subarray(nextSOI >= 16 ? nextSOI - 16 : nextSOI);
+          }
         }
       }
     });
 
+    socket.on("timeout", () => {
+      console.warn("[Bambu Camera] Socket idle timeout. Resetting connection...");
+      disconnectCamera();
+      reconnectTimer = setTimeout(connectCamera, 2000);
+    });
+
     socket.on("error", (err) => {
       console.warn("[Bambu Camera] Socket error:", err.message);
+      disconnectCamera();
+      reconnectTimer = setTimeout(connectCamera, 3000);
     });
 
     socket.on("close", () => {
       console.log("[Bambu Camera] Connection closed. Will reconnect in 3 seconds...");
-      isConnected = false;
-      cameraSocket = null;
+      disconnectCamera();
       reconnectTimer = setTimeout(connectCamera, 3000);
     });
 
     cameraSocket = socket;
   } catch (err) {
     console.error("[Bambu Camera] Failed to connect:", err.message);
-    cameraSocket = null;
+    disconnectCamera();
     reconnectTimer = setTimeout(connectCamera, 5000);
   }
 }
 
+export function getCameraStatus() {
+  const age = lastFrameTimestamp ? Date.now() - lastFrameTimestamp : null;
+  const online = Boolean(isConnected && latestFrame && age !== null && age < 15000);
+  return {
+    online,
+    connected: isConnected,
+    lastFrameAgeMs: age,
+    hasFrame: Boolean(latestFrame),
+  };
+}
+
 export function isCameraOnline() {
-  return isConnected && latestFrame !== null && Date.now() - lastFrameTimestamp < 10000;
+  return getCameraStatus().online;
 }
 
 export function getLatestFrame() {
@@ -112,12 +183,13 @@ export function getLatestFrame() {
 }
 
 export function handleCameraStream(req, res) {
-  if (!cameraSocket) {
+  if (!cameraSocket && (!reconnectTimer || !isConnected)) {
     connectCamera();
   }
 
   res.writeHead(200, {
-    "Content-Type": "multipart/x-mixed-replace; boundary=--bambulabframe",
+    "Content-Type": "multipart/x-mixed-replace; boundary=bambulabframe",
+    "X-Accel-Buffering": "no",
     "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
     Pragma: "no-cache",
     Expires: "0",
@@ -157,7 +229,7 @@ export function handleCameraStream(req, res) {
 }
 
 export function handleCameraSnapshot(req, res) {
-  if (!cameraSocket) {
+  if (!cameraSocket && (!reconnectTimer || !isConnected)) {
     connectCamera();
   }
 
@@ -165,6 +237,7 @@ export function handleCameraSnapshot(req, res) {
     res.writeHead(200, {
       "Content-Type": "image/jpeg",
       "Content-Length": latestFrame.length,
+      "X-Accel-Buffering": "no",
       "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
       Pragma: "no-cache",
       Expires: "0",
@@ -184,6 +257,7 @@ export function handleCameraSnapshot(req, res) {
     res.writeHead(200, {
       "Content-Type": "image/jpeg",
       "Content-Length": frame.length,
+      "X-Accel-Buffering": "no",
       "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
       Pragma: "no-cache",
       Expires: "0",

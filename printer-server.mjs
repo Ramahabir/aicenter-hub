@@ -24,6 +24,8 @@ import {
   initBambuCamera,
   handleCameraStream,
   handleCameraSnapshot,
+  getCameraStatus,
+  forceReconnectCamera,
 } from "./bambu-camera.mjs";
 
 const { print } = printerTools;
@@ -318,16 +320,26 @@ app.post(["/api/agent/jobs/:id/status", BASE_PATH + "/api/agent/jobs/:id/status"
 });
 
 app.get(["/api/bambu/status", BASE_PATH + "/api/bambu/status"], (_request, response) => {
-  response.json({ telemetry: getBambuTelemetry() });
+  const telemetry = getBambuTelemetry();
+  response.json({ telemetry: { ...telemetry, cameraStatus: getCameraStatus() } });
 });
 
 app.all(["/api/bambu/sync", BASE_PATH + "/api/bambu/sync"], async (_request, response) => {
   try {
+    forceReconnectCamera();
     const result = await forceSyncBambu();
-    response.json(result);
+    response.json({
+      ...result,
+      telemetry: { ...result.telemetry, cameraStatus: getCameraStatus() },
+    });
   } catch (err) {
     response.status(500).json({ error: err instanceof Error ? err.message : "Failed to sync with Bambu printer" });
   }
+});
+
+app.post(["/api/bambu/camera/reconnect", BASE_PATH + "/api/bambu/camera/reconnect"], (_request, response) => {
+  forceReconnectCamera();
+  response.json({ ok: true, cameraStatus: getCameraStatus() });
 });
 
 app.get(["/api/bambu/camera.mjpeg", BASE_PATH + "/api/bambu/camera.mjpeg"], (request, response) => {

@@ -33,6 +33,12 @@ type BambuTelemetry = {
   activeTray?: FilamentTray | null;
   amsTrays?: FilamentTray[];
   cameraUrl?: string;
+  cameraStatus?: {
+    online: boolean;
+    connected: boolean;
+    lastFrameAgeMs: number | null;
+    hasFrame: boolean;
+  };
   isConfigured: boolean;
 };
 
@@ -152,6 +158,24 @@ export default function ServiceHub() {
   const [invoiceModalOpen, setInvoiceModalOpen] = useState(false);
   const [invoiceJob, setInvoiceJob] = useState<Bambu3DJob | null>(null);
   const [cameraKey, setCameraKey] = useState(0);
+  const [cameraSnapshotFallback, setCameraSnapshotFallback] = useState(false);
+  const [snapshotTimestamp, setSnapshotTimestamp] = useState(Date.now());
+
+  useEffect(() => {
+    if (!cameraSnapshotFallback) return;
+    const timer = setInterval(() => {
+      setSnapshotTimestamp(Date.now());
+    }, 2500);
+    return () => clearInterval(timer);
+  }, [cameraSnapshotFallback]);
+
+  const handleReconnectCamera = async () => {
+    try {
+      await fetch(`${serviceBasePath}/api/bambu/camera/reconnect`, { method: "POST" }).catch(() => {});
+    } catch {}
+    setCameraSnapshotFallback(false);
+    setCameraKey((k) => k + 1);
+  };
   const [bambuTelemetry, setBambuTelemetry] = useState<BambuTelemetry | null>(null);
   const [isSyncingBambu, setIsSyncingBambu] = useState(false);
   const [jobs3D, setJobs3D] = useState<Bambu3DJob[]>([]);
@@ -904,11 +928,18 @@ export default function ServiceHub() {
           {/* Main Video Stream Frame */}
           <div className="camera-video-frame">
             <div className="camera-video-topbar">
-              <span className="cam-live-indicator"><i /> LIVE FEED · 1080P LAN</span>
+              <span className="cam-live-indicator">
+                <i style={cameraSnapshotFallback ? { background: "#eab308" } : undefined} />
+                {cameraSnapshotFallback
+                  ? "LIVE SNAPSHOTS · 2.5s"
+                  : bambuTelemetry?.cameraStatus?.online
+                  ? "LIVE FEED · 1080P LAN"
+                  : "STREAM RECONNECTING..."}
+              </span>
               <button
                 type="button"
                 className="btn-cam-resync"
-                onClick={() => setCameraKey((k) => k + 1)}
+                onClick={handleReconnectCamera}
                 title="Reconnect video stream"
               >
                 🔄 Reconnect
@@ -917,15 +948,18 @@ export default function ServiceHub() {
 
             <div className="camera-video-wrapper">
               <img
-                key={cameraKey}
-                src={`${serviceBasePath}/api/bambu/camera.mjpeg?t=${cameraKey}`}
+                key={`${cameraKey}-${cameraSnapshotFallback ? snapshotTimestamp : "mjpeg"}`}
+                src={
+                  cameraSnapshotFallback
+                    ? `${serviceBasePath}/api/bambu/camera.jpg?t=${snapshotTimestamp}`
+                    : `${serviceBasePath}/api/bambu/camera.mjpeg?t=${cameraKey}`
+                }
                 alt="Bambu Lab P1S Chamber Live Stream"
                 className="camera-video-element"
-                onError={(e) => {
-                  const target = e.currentTarget;
-                  setTimeout(() => {
-                    target.src = `${serviceBasePath}/api/bambu/camera.jpg?t=${Date.now()}`;
-                  }, 2500);
+                onError={() => {
+                  if (!cameraSnapshotFallback) {
+                    setCameraSnapshotFallback(true);
+                  }
                 }}
               />
             </div>
@@ -2350,21 +2384,27 @@ export default function ServiceHub() {
               {/* Left Column: Real-time Live Video Stream */}
               <div className="camera-box">
                 <div className="camera-tag">
-                  <i />
-                  <span>LIVE CAMERA STREAM · BAMBU LAB P1S</span>
+                  <i style={cameraSnapshotFallback ? { background: "#eab308" } : undefined} />
+                  <span>
+                    {cameraSnapshotFallback
+                      ? "LIVE SNAPSHOTS (2.5s) · BAMBU LAB P1S"
+                      : "LIVE CAMERA STREAM · BAMBU LAB P1S"}
+                  </span>
                 </div>
 
                 <img
-                  key={cameraKey}
-                  src={`${serviceBasePath}/api/bambu/camera.mjpeg?t=${cameraKey}`}
+                  key={`modal-${cameraKey}-${cameraSnapshotFallback ? snapshotTimestamp : "mjpeg"}`}
+                  src={
+                    cameraSnapshotFallback
+                      ? `${serviceBasePath}/api/bambu/camera.jpg?t=${snapshotTimestamp}`
+                      : `${serviceBasePath}/api/bambu/camera.mjpeg?t=${cameraKey}`
+                  }
                   alt="Bambu Lab P1S Live Video Feed"
                   className="camera-feed"
-                  onError={(e) => {
-                    const target = e.currentTarget;
-                    // Fallback to snapshot refresh if multipart needs reconnecting
-                    setTimeout(() => {
-                      target.src = `${serviceBasePath}/api/bambu/camera.jpg?t=${Date.now()}`;
-                    }, 2500);
+                  onError={() => {
+                    if (!cameraSnapshotFallback) {
+                      setCameraSnapshotFallback(true);
+                    }
                   }}
                 />
 
@@ -2372,7 +2412,7 @@ export default function ServiceHub() {
                   <button
                     type="button"
                     className="btn-cam-refresh"
-                    onClick={() => setCameraKey((k) => k + 1)}
+                    onClick={handleReconnectCamera}
                     title="Reconnect live video stream"
                   >
                     🔄 Reconnect Stream
