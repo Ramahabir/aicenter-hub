@@ -12,6 +12,7 @@ const BAMBU_STUDIO_PATH =
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const JOBS_FILE = path.join(DATA_DIR, "bambu-3d-jobs.json");
+const LEGACY_JOBS_FILE = path.join(process.cwd(), "bambu-3d-jobs.json");
 const UPLOAD_DIR = path.join(process.cwd(), "uploads", "3d-prints");
 
 await fs.mkdir(DATA_DIR, { recursive: true });
@@ -251,10 +252,39 @@ export function generateInvoiceNumber(trackingCode, date = new Date()) {
  */
 async function loadJobs() {
   try {
-    const data = await fs.readFile(JOBS_FILE, "utf-8");
+    let data = "[]";
+    try {
+      data = await fs.readFile(JOBS_FILE, "utf-8");
+    } catch {
+      try {
+        data = await fs.readFile(LEGACY_JOBS_FILE, "utf-8");
+        await fs.writeFile(JOBS_FILE, data, "utf-8");
+      } catch {}
+    }
     const parsed = JSON.parse(data);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((j) => {
+    let jobs = Array.isArray(parsed) ? parsed : [];
+
+    // Fallback sync with legacy file if it has records missing from JOBS_FILE
+    try {
+      const legacyRaw = await fs.readFile(LEGACY_JOBS_FILE, "utf-8");
+      const legacyParsed = JSON.parse(legacyRaw);
+      if (Array.isArray(legacyParsed) && legacyParsed.length > 0) {
+        const existingIds = new Set(jobs.map((j) => j.id));
+        let changed = false;
+        for (const legacyJob of legacyParsed) {
+          if (!existingIds.has(legacyJob.id)) {
+            jobs.push(legacyJob);
+            existingIds.add(legacyJob.id);
+            changed = true;
+          }
+        }
+        if (changed) {
+          await fs.writeFile(JOBS_FILE, JSON.stringify(jobs, null, 2), "utf-8");
+        }
+      }
+    } catch {}
+
+    return jobs.map((j) => {
       const createdAtDate = j.createdAt ? new Date(j.createdAt) : new Date();
       return {
         ...j,
