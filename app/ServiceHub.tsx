@@ -39,6 +39,9 @@ type BambuTelemetry = {
     lastFrameAgeMs: number | null;
     hasFrame: boolean;
   };
+  bridgeOnline?: boolean;
+  bridgeMode?: "aio-bridge" | "direct-fallback";
+  bridgeHostname?: string | null;
   isConfigured: boolean;
 };
 
@@ -601,14 +604,28 @@ export default function ServiceHub() {
     }
   }
 
-  // Admin: Open in Bambu Studio locally on PC
+  // Admin: Open in Bambu Studio locally on PC or dispatch to AIO Bridge
   async function handleOpenStudio(job: Bambu3DJob) {
     setOpeningStudioId(job.id);
     setAdminNotice("");
     try {
-      const downloadUrl = `${window.location.origin}${apiBase()}/bambu/jobs/${job.id}/download`;
+      // 1. Check if AIO Bridge is online and dispatch to Workshop AIO PC
+      try {
+        const bridgeRes = await fetch(`${apiBase()}/bambu/jobs/${job.id}/open-studio`, {
+          method: "POST",
+          headers: { "X-Service-Pin": adminPassword },
+        });
+        if (bridgeRes.ok) {
+          const bridgeData = await bridgeRes.json();
+          if (bridgeData.mode === "aio-bridge") {
+            setAdminNotice(`🚀 Dispatched to Workshop AIO PC! "${job.fileName}" is opening in Bambu Studio on the AIO station.`);
+            return;
+          }
+        }
+      } catch {}
 
-      // 1. Direct browser download with proper original file name
+      // 2. Direct Fallback: browser download with original file name
+      const downloadUrl = `${window.location.origin}${apiBase()}/bambu/jobs/${job.id}/download`;
       const a = document.createElement("a");
       a.href = downloadUrl;
       a.download = job.fileName;
@@ -616,7 +633,7 @@ export default function ServiceHub() {
       a.click();
       document.body.removeChild(a);
 
-      // 2. Launch registered local protocol handler (aicenter-bambu://)
+      // 3. Launch registered local protocol handler (aicenter-bambu://)
       const protocolUrl = `aicenter-bambu://open?url=${encodeURIComponent(downloadUrl)}&file=${encodeURIComponent(job.fileName)}`;
       const iframe = document.createElement("iframe");
       iframe.style.display = "none";
@@ -628,7 +645,7 @@ export default function ServiceHub() {
         } catch {}
       }, 2000);
 
-      setAdminNotice(`📥 Opening "${job.fileName}" on your PC! If Bambu Studio doesn't open automatically, click the downloaded file in your browser's download shelf.`);
+      setAdminNotice(`📥 AIO Bridge offline (Direct Mode). Opening "${job.fileName}" via browser download shelf.`);
     } catch (err) {
       setAdminNotice(err instanceof Error ? err.message : "Failed to open Bambu Studio");
     } finally {
@@ -918,6 +935,22 @@ export default function ServiceHub() {
           <div className="camera-heading-chips">
             <span className={`cam-status-pill ${p1sOnline ? "online" : "offline"}`}>
               <i /> {p1sOnline ? `P1S ${p1sState}` : "Printer Offline"}
+            </span>
+            <span
+              className={`cam-status-pill ${bambuTelemetry?.bridgeOnline ? "online" : ""}`}
+              style={{
+                borderColor: bambuTelemetry?.bridgeOnline ? "rgba(34, 197, 94, 0.4)" : "rgba(234, 179, 8, 0.4)",
+                color: bambuTelemetry?.bridgeOnline ? "#15803d" : "#a16207",
+                background: bambuTelemetry?.bridgeOnline ? "rgba(34, 197, 94, 0.08)" : "rgba(234, 179, 8, 0.08)",
+              }}
+              title={
+                bambuTelemetry?.bridgeOnline
+                  ? `Workshop AIO PC (${bambuTelemetry.bridgeHostname || "Online"}) is connected with Bambu Studio`
+                  : "Workshop AIO PC is offline. 24/7 Direct Standalone LAN Mode active."
+              }
+            >
+              <i style={{ background: bambuTelemetry?.bridgeOnline ? "#22c55e" : "#eab308" }} />
+              {bambuTelemetry?.bridgeOnline ? "AIO Studio Bridge" : "Direct Standalone"}
             </span>
             <span className="cam-temp-pill">🔥 Nozzle: {bambuTelemetry?.nozzleTemp || 0}°C</span>
             <span className="cam-temp-pill">🛏 Bed: {bambuTelemetry?.bedTemp || 0}°C</span>

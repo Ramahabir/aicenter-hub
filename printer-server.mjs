@@ -100,8 +100,21 @@ let remoteAgentState = {
   lastHeartbeat: 0,
 };
 
+let bambuBridgeState = {
+  online: false,
+  hostname: "aio-pc",
+  studioInstalled: false,
+  studioPath: null,
+  lastHeartbeat: 0,
+  queuedTasks: new Map(),
+};
+
 function isRemoteAgentOnline() {
   return Date.now() - remoteAgentState.lastHeartbeat < 30000;
+}
+
+function isBambuBridgeOnline() {
+  return Date.now() - bambuBridgeState.lastHeartbeat < 25000;
 }
 
 function publicJob(job) {
@@ -321,16 +334,70 @@ app.post(["/api/agent/jobs/:id/status", BASE_PATH + "/api/agent/jobs/:id/status"
 
 app.get(["/api/bambu/status", BASE_PATH + "/api/bambu/status"], (_request, response) => {
   const telemetry = getBambuTelemetry();
-  response.json({ telemetry: { ...telemetry, cameraStatus: getCameraStatus() } });
+  const bridgeOnline = isBambuBridgeOnline();
+  response.json({
+    telemetry: {
+      ...telemetry,
+      cameraStatus: getCameraStatus(),
+      bridgeOnline,
+      bridgeMode: bridgeOnline ? "aio-bridge" : "direct-fallback",
+      bridgeHostname: bridgeOnline ? bambuBridgeState.hostname : null,
+    },
+  });
+});
+
+// AIO PC Bambu Bridge Heartbeat
+app.post(["/api/bambu/bridge/heartbeat", BASE_PATH + "/api/bambu/bridge/heartbeat"], (request, response) => {
+  const { hostname, studioInstalled, studioPath, secret } = request.body || {};
+  if (SERVICE_PIN && secret && secret !== SERVICE_PIN) {
+    return response.status(401).json({ error: "Invalid agent secret" });
+  }
+  bambuBridgeState = {
+    ...bambuBridgeState,
+    online: true,
+    hostname: hostname || "aio-pc",
+    studioInstalled: Boolean(studioInstalled),
+    studioPath: studioPath || null,
+    lastHeartbeat: Date.now(),
+  };
+  response.json({ ok: true, serverTime: new Date().toISOString() });
+});
+
+// AIO PC Bambu Bridge Poll Tasks
+app.get(["/api/bambu/bridge/tasks", BASE_PATH + "/api/bambu/bridge/tasks"], (request, response) => {
+  const secret = request.headers["x-agent-secret"] || request.query.secret;
+  if (SERVICE_PIN && secret && secret !== SERVICE_PIN) {
+    return response.status(401).json({ error: "Invalid agent secret" });
+  }
+  bambuBridgeState.lastHeartbeat = Date.now();
+  const tasks = Array.from(bambuBridgeState.queuedTasks.values());
+  response.json({ tasks });
+});
+
+// AIO PC Bambu Bridge Complete Task
+app.post(["/api/bambu/bridge/tasks/:id/complete", BASE_PATH + "/api/bambu/bridge/tasks/:id/complete"], (request, response) => {
+  const secret = request.headers["x-agent-secret"] || request.body?.secret;
+  if (SERVICE_PIN && secret && secret !== SERVICE_PIN) {
+    return response.status(401).json({ error: "Invalid agent secret" });
+  }
+  bambuBridgeState.queuedTasks.delete(request.params.id);
+  response.json({ ok: true });
 });
 
 app.all(["/api/bambu/sync", BASE_PATH + "/api/bambu/sync"], async (_request, response) => {
   try {
     forceReconnectCamera();
     const result = await forceSyncBambu();
+    const bridgeOnline = isBambuBridgeOnline();
     response.json({
       ...result,
-      telemetry: { ...result.telemetry, cameraStatus: getCameraStatus() },
+      telemetry: {
+        ...result.telemetry,
+        cameraStatus: getCameraStatus(),
+        bridgeOnline,
+        bridgeMode: bridgeOnline ? "aio-bridge" : "direct-fallback",
+        bridgeHostname: bridgeOnline ? bambuBridgeState.hostname : null,
+      },
     });
   } catch (err) {
     response.status(500).json({ error: err instanceof Error ? err.message : "Failed to sync with Bambu printer" });
@@ -446,9 +513,39 @@ app.post(
       return response.status(401).json({ error: "Incorrect access PIN" });
     }
     try {
-      const result = await launchBambuStudio(request.params.id);
+      const job = await get3DJob(request.params.id);
+      if (!job) return response.status(404).json({ error: "Job not found" });
+
       const downloadUrl = `${BASE_PATH}/api/bambu/jobs/${request.params.id}/download`;
-      response.json({ ...result, downloadUrl });
+
+      // If AIO Bridge is active, dispatch task to Workshop AIO PC
+      if (isBambuBridgeOnline()) {
+        const taskId = crypto.randomUUID();
+        bambuBridgeState.queuedTasks.set(taskId, {
+          id: taskId,
+          jobId: job.id,
+          fileName: job.fileName,
+          downloadUrl,
+          createdAt: new Date().toISOString(),
+        });
+        return response.json({
+          success: true,
+          mode: "aio-bridge",
+          localLaunched: true,
+          fileName: job.fileName,
+          downloadUrl,
+          message: `Dispatched to Workshop AIO PC (${bambuBridgeState.hostname}). Opening inside Bambu Studio on screen...`,
+        });
+      }
+
+      // Standalone Fallback: Prepare file for client-side Bambu Studio / direct download
+      const result = await launchBambuStudio(request.params.id);
+      response.json({
+        ...result,
+        mode: "direct-fallback",
+        downloadUrl,
+        message: "AIO PC Bridge is offline. File prepared for direct download / manual slicing.",
+      });
     } catch (err) {
       response.status(500).json({ error: err instanceof Error ? err.message : "Failed to prepare Bambu Studio file" });
     }
